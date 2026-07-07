@@ -667,54 +667,30 @@ class CheckAvailabilityTool(Tool):
             )
 
         try:
-            service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
+            from app.google.calendar_service import check_slot as calendar_check_slot
 
-            # Parse the time range
-            start_dt = datetime.fromisoformat(start_datetime_str.replace('Z', '+00:00'))
-            end_dt = start_dt + timedelta(minutes=int(duration_minutes))
-
-            # Query for events in this time range
-            events_result = service.events().list(
-                calendarId='primary',
-                timeMin=start_dt.isoformat() + 'Z',
-                timeMax=end_dt.isoformat() + 'Z',
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-
-            events_list = events_result.get('items', [])
-
-            # Convert to CalendarEvent objects
-            conflicts = []
-            for event in events_list:
-                event_start = event['start'].get('dateTime', event['start'].get('date'))
-                event_end = event['end'].get('dateTime', event['end'].get('date'))
-
-                conflicts.append(CalendarEvent(
-                    id=event['id'],
-                    summary=event.get('summary', 'No title'),
-                    start_time=event_start,
-                    end_time=event_end,
-                    description=event.get('description'),
-                    location=event.get('location'),
-                    html_link=event.get('htmlLink')
-                ))
-
-            is_available = len(conflicts) == 0
+            line = calendar_check_slot(
+                credentials,
+                start_datetime_str,
+                duration_minutes=int(duration_minutes),
+                timezone=DEFAULT_TIMEZONE,
+            )
+            start_dt = datetime.fromisoformat(start_datetime_str.replace("Z", "+00:00"))
             time_slot_str = f"{start_dt.strftime('%A, %B %d at %I:%M %p')} ({duration_minutes} min)"
+            is_available = "FREE" in line
 
             if is_available:
                 message = f"✅ You are free at {time_slot_str}"
             else:
-                conflict_list = ", ".join([f"'{c.summary}'" for c in conflicts])
-                message = f"❌ You have {len(conflicts)} conflict(s) at {time_slot_str}: {conflict_list}"
+                conflict = line.split("CONFLICT —", 1)[-1].strip() if "CONFLICT" in line else "busy"
+                message = f"❌ You have a conflict at {time_slot_str}: {conflict}"
 
             return AvailabilityResult(
                 success=True,
                 is_available=is_available,
                 time_slot=time_slot_str,
-                conflicting_events=conflicts,
-                message=message
+                conflicting_events=[],
+                message=message,
             )
 
         except ValueError as e:
@@ -910,99 +886,34 @@ class FindFreeSlotsTool(Tool):
             )
 
         try:
-            service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
+            from app.google.calendar_service import find_free_slots_text
 
-            # Get time range
+            free_text = find_free_slots_text(
+                credentials,
+                days=int(days_ahead),
+                duration_minutes=int(min_duration),
+                timezone=DEFAULT_TIMEZONE,
+                working_hours_only=working_hours_only,
+            )
+
             tz = pytz.timezone(DEFAULT_TIMEZONE)
             now = datetime.now(tz)
-            start_time = now
             end_time = now + timedelta(days=days_ahead)
+            date_range_str = f"{now.strftime('%B %d')} - {end_time.strftime('%B %d, %Y')}"
 
-            # Get all events in this range
-            events_result = service.events().list(
-                calendarId='primary',
-                timeMin=start_time.isoformat(),
-                timeMax=end_time.isoformat(),
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-
-            events_list = events_result.get('items', [])
-
-            # Build list of busy periods
-            busy_periods = []
-            for event in events_list:
-                event_start = event['start'].get('dateTime')
-                event_end = event['end'].get('dateTime')
-                if event_start and event_end:
-                    busy_periods.append({
-                        'start': datetime.fromisoformat(event_start.replace('Z', '+00:00')),
-                        'end': datetime.fromisoformat(event_end.replace('Z', '+00:00'))
-                    })
-
-            # Find free slots
-            free_slots = []
-            current = start_time
-
-            # Iterate through each day
-            for day in range(days_ahead + 1):
-                day_start = (start_time + timedelta(days=day)).replace(hour=9 if working_hours_only else 0,
-                                                                        minute=0, second=0, microsecond=0)
-                day_end = day_start.replace(hour=17 if working_hours_only else 23,
-                                           minute=0 if working_hours_only else 59)
-
-                # Skip weekends if working_hours_only
-                if working_hours_only and day_start.weekday() >= 5:  # Saturday=5, Sunday=6
-                    continue
-
-                slot_start = day_start
-
-                while slot_start < day_end:
-                    slot_end = slot_start + timedelta(minutes=min_duration)
-
-                    if slot_end > day_end:
-                        break
-
-                    # Check if this slot overlaps with any busy period
-                    is_free = True
-                    for busy in busy_periods:
-                        if (slot_start < busy['end'] and slot_end > busy['start']):
-                            is_free = False
-                            slot_start = busy['end']  # Jump to end of busy period
-                            break
-
-                    if is_free:
-                        free_slots.append(FreeSlot(
-                            start_time=slot_start.isoformat(),
-                            end_time=slot_end.isoformat(),
-                            duration_minutes=min_duration
-                        ))
-                        slot_start = slot_end
-
-                    # Limit to 20 slots to avoid overwhelming output
-                    if len(free_slots) >= 20:
-                        break
-
-                if len(free_slots) >= 20:
-                    break
-
-            date_range_str = f"{start_time.strftime('%B %d')} - {end_time.strftime('%B %d, %Y')}"
-
-            if len(free_slots) == 0:
-                message = f"No free slots of {min_duration} minutes found in the next {days_ahead} days."
-            else:
-                message = f"Found {len(free_slots)} free time slot(s) of {min_duration}+ minutes:\n"
-                for idx, slot in enumerate(free_slots[:10], 1):  # Show first 10
-                    slot_dt = datetime.fromisoformat(slot.start_time)
-                    message += f"\n{idx}. {slot_dt.strftime('%A %m/%d at %I:%M %p')}"
-                if len(free_slots) > 10:
-                    message += f"\n... and {len(free_slots) - 10} more"
+            if free_text.startswith("No free"):
+                return FindFreeSlotsResult(
+                    success=True,
+                    date_range=date_range_str,
+                    free_slots=[],
+                    message=free_text,
+                )
 
             return FindFreeSlotsResult(
                 success=True,
                 date_range=date_range_str,
-                free_slots=free_slots,
-                message=message
+                free_slots=[],
+                message=f"Found free time slots:\n{free_text}",
             )
 
         except Exception as e:

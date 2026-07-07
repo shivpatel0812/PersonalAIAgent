@@ -11,11 +11,12 @@ from typing import Any
 from googleapiclient.discovery import build
 from pydantic import BaseModel, Field
 
+from app.agents.email_agent import settings as agent_settings
 from app.ai.tools.base import Tool, ToolParameter
 from app.google.email_safety import validate_outbound_email
 from app.google.oauth import load_credentials
 
-MAX_BODY_CHARS = 6000
+MAX_BODY_CHARS = agent_settings.MAX_BODY_CHARS
 MAX_THREAD_MESSAGES = 50
 
 
@@ -107,6 +108,39 @@ def _get_gmail_service():
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
 
+class AttachmentInfo(BaseModel):
+    filename: str
+    mime_type: str = "application/octet-stream"
+    size_bytes: int = 0
+    attachment_id: str = ""
+    extracted_text: str | None = None
+    extract_note: str | None = None
+
+
+def extract_attachments_from_payload(payload: dict[str, Any]) -> list[AttachmentInfo]:
+    """Collect attachment metadata from a Gmail MIME payload without downloading."""
+    attachments: list[AttachmentInfo] = []
+
+    def walk(part: dict[str, Any]) -> None:
+        filename = (part.get("filename") or "").strip()
+        body = part.get("body") or {}
+        attachment_id = body.get("attachmentId")
+        if filename and attachment_id:
+            attachments.append(
+                AttachmentInfo(
+                    filename=filename,
+                    mime_type=part.get("mimeType") or "application/octet-stream",
+                    size_bytes=int(body.get("size") or 0),
+                    attachment_id=attachment_id,
+                )
+            )
+        for subpart in part.get("parts") or []:
+            walk(subpart)
+
+    walk(payload)
+    return attachments
+
+
 class ThreadMessage(BaseModel):
     email_id: str
     from_email: str
@@ -115,6 +149,7 @@ class ThreadMessage(BaseModel):
     subject: str
     body: str
     snippet: str = ""
+    attachments: list[AttachmentInfo] = Field(default_factory=list)
 
 
 class EmailThreadConversation(BaseModel):
@@ -155,6 +190,7 @@ def _fetch_thread_conversation(service, thread_id: str) -> EmailThreadConversati
                 subject=headers.get("Subject", subject),
                 body=_truncate_body(_extract_body_from_payload(msg["payload"])),
                 snippet=msg.get("snippet", ""),
+                attachments=extract_attachments_from_payload(msg["payload"]),
             )
         )
 

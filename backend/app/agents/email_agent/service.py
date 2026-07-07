@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from googleapiclient.discovery import build
 
 from app.agents.email_agent import settings as agent_settings
+from app.agents.email_agent.attachments import attachments_to_api, enrich_conversation_attachments
 from app.agents.email_agent.detector import (
     get_message_thread_id,
     is_likely_automated,
@@ -16,6 +17,19 @@ from app.agents.email_agent.detector import (
 )
 from app.agents.email_agent.drafter import classify_needs_reply, generate_initial_draft, revise_draft
 from app.agents.email_agent.gmail import send_thread_reply, thread_participant_emails
+from app.agents.email_agent.scheduling import (
+    build_calendar_availability_block,
+    detect_scheduling,
+)
+from app.agents.email_agent.sender_history import fetch_sender_history_block
+from app.agents.email_agent.sender_intelligence import (
+    candidate_sort_key,
+    format_sender_context_block,
+    get_sender_context,
+    maybe_refresh_sender_priorities,
+    should_auto_archive,
+)
+from app.agents.email_agent.user_profile import get_profile_block_with_defaults
 from app.ai.config import settings as ai_settings
 from app.ai.tools.gmail_tool import _fetch_thread_conversation
 from app.db.email_agent import (
@@ -32,7 +46,7 @@ from app.db.email_agent import (
     update_item,
 )
 from app.db.google_accounts import list_accounts
-from app.google.oauth import load_credentials
+from app.google.oauth import get_granted_services, load_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +56,55 @@ def _reply_subject(subject: str) -> str:
     if subject.lower().startswith("re:"):
         return subject
     return f"Re: {subject}"
+
+
+async def _sort_candidates_by_sender_priority(candidates: list) -> list:
+    enriched: list[tuple] = []
+    for candidate in candidates:
+        context = await get_sender_context(candidate.from_email)
+        enriched.append((candidate, context))
+    enriched.sort(key=lambda pair: candidate_sort_key(pair[1]), reverse=True)
+    return [candidate for candidate, _ in enriched]
+
+
+async def _build_draft_prompt_context(
+    *,
+    item: EmailAgentItem,
+    conversation,
+    credentials,
+    account,
+) -> tuple[str, str, str, dict]:
+    profile_block = await get_profile_block_with_defaults(item.user_id)
+
+    sender_context = await get_sender_context(item.sender_email, user_id=item.user_id)
+    sender_context_block = format_sender_context_block(sender_context)
+
+    from app.db.user_email_profile import get_profile
+
+    profile = await get_profile(item.user_id)
+    timezone = profile.timezone if profile else "America/Los_Angeles"
+
+    granted = get_granted_services(item.google_account_id)
+    scheduling = detect_scheduling(
+        subject=item.subject or conversation.subject,
+        conversation=conversation,
+        reply_to_message_id=item.gmail_message_id,
+    )
+    scheduling = build_calendar_availability_block(
+        credentials,
+        scheduling,
+        granted_scopes=granted,
+        timezone=timezone,
+    )
+
+    calendar_block = scheduling.availability_block if scheduling.is_scheduling else ""
+    draft_meta = {
+        "schedulingDetected": scheduling.detected and scheduling.is_scheduling,
+        "calendarChecked": scheduling.calendar_checked,
+        "calendarConnected": scheduling.calendar_connected,
+    }
+
+    return profile_block, sender_context_block, calendar_block, draft_meta
 
 
 async def _discard_failed_item(item_id: str, reason: str) -> None:
@@ -126,6 +189,7 @@ async def scan_for_reply_candidates() -> dict:
             credentials,
             account_email=account.email,
         )
+        candidates = await _sort_candidates_by_sender_priority(candidates)
 
         for candidate in candidates:
             if await count_active_items() >= agent_settings.MAX_ACTIVE_QUEUE_SIZE:
@@ -147,6 +211,16 @@ async def scan_for_reply_candidates() -> dict:
                     "Skipping automated email %s: %s",
                     candidate.message_id,
                     skip_reason,
+                )
+                continue
+
+            sender_context = await get_sender_context(candidate.from_email)
+            if should_auto_archive(sender_context):
+                skipped_automated += 1
+                logger.info(
+                    "Skipping auto-archive sender %s for message %s",
+                    candidate.from_email,
+                    candidate.message_id,
                 )
                 continue
 
@@ -214,26 +288,52 @@ async def draft_item(item_id: str) -> EmailAgentItem:
 
     service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
     conversation = _fetch_thread_conversation(service, item.gmail_thread_id)
+    enrich_conversation_attachments(service, conversation)
 
     from app.db.google_accounts import get_account
 
     account = await get_account(item.google_account_id)
     account_email = account.email if account else ""
 
-    summary, draft = generate_initial_draft(
+    sender_history = fetch_sender_history_block(
+        service,
+        sender_email=item.sender_email,
+        exclude_thread_id=item.gmail_thread_id,
+        current_subject=item.subject or conversation.subject,
+    )
+
+    profile_block, sender_context_block, calendar_block, draft_meta = (
+        await _build_draft_prompt_context(
+            item=item,
+            conversation=conversation,
+            credentials=credentials,
+            account=account,
+        )
+    )
+
+    summary, draft, middle_summary = generate_initial_draft(
         conversation=conversation,
         account_email=account_email,
         sender_name=item.sender_name or item.sender_email,
         sender_email=item.sender_email,
         reply_to_message_id=item.gmail_message_id,
+        cached_middle_summary=item.thread_context_summary,
+        sender_history_block=sender_history,
+        profile_block=profile_block,
+        sender_context_block=sender_context_block,
+        calendar_block=calendar_block,
     )
 
-    updated = await update_item(
-        item_id,
-        summary=summary or item.summary,
-        draft_response=draft,
-        status="draft_ready",
-    )
+    update_fields: dict = {
+        "summary": summary or item.summary,
+        "draft_response": draft,
+        "status": "draft_ready",
+        "draft_context_meta": draft_meta,
+    }
+    if middle_summary:
+        update_fields["thread_context_summary"] = middle_summary
+
+    updated = await update_item(item_id, **update_fields)
     if not updated:
         raise ValueError("Failed to update item")
 
@@ -262,11 +362,28 @@ async def adjust_item_draft(item_id: str, message: str) -> dict:
 
     service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
     conversation = _fetch_thread_conversation(service, item.gmail_thread_id)
+    enrich_conversation_attachments(service, conversation)
 
     from app.db.google_accounts import get_account
 
     account = await get_account(item.google_account_id)
     account_email = account.email if account else ""
+
+    sender_history = fetch_sender_history_block(
+        service,
+        sender_email=item.sender_email,
+        exclude_thread_id=item.gmail_thread_id,
+        current_subject=item.subject or conversation.subject,
+    )
+
+    profile_block, sender_context_block, calendar_block, draft_meta = (
+        await _build_draft_prompt_context(
+            item=item,
+            conversation=conversation,
+            credentials=credentials,
+            account=account,
+        )
+    )
 
     await add_chat_message(item_id, role="user", content=message)
     chat_rows = await list_chat_messages(item_id)
@@ -279,9 +396,19 @@ async def adjust_item_draft(item_id: str, message: str) -> dict:
         chat_history=chat_history,
         user_message=message,
         reply_to_message_id=item.gmail_message_id,
+        cached_middle_summary=item.thread_context_summary,
+        sender_history_block=sender_history,
+        profile_block=profile_block,
+        sender_context_block=sender_context_block,
+        calendar_block=calendar_block,
     )
 
-    await update_item(item_id, draft_response=revised_draft, status="draft_ready")
+    await update_item(
+        item_id,
+        draft_response=revised_draft,
+        status="draft_ready",
+        draft_context_meta=draft_meta,
+    )
     assistant_row = await add_chat_message(
         item_id,
         role="assistant",
@@ -356,6 +483,8 @@ async def approve_and_send_item(item_id: str, draft_response: str) -> dict:
     except Exception as exc:
         logger.warning("Failed to log email event: %s", exc)
 
+    await maybe_refresh_sender_priorities()
+
     return {"success": True, "messageId": sent.get("id")}
 
 
@@ -387,6 +516,7 @@ async def get_item_thread(item_id: str) -> dict:
 
     service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
     conversation = _fetch_thread_conversation(service, item.gmail_thread_id)
+    enrich_conversation_attachments(service, conversation)
 
     messages = []
     for message in conversation.messages:
@@ -402,6 +532,7 @@ async def get_item_thread(item_id: str) -> dict:
                 "body": message.body,
                 "isInbound": is_inbound,
                 "isTarget": message.email_id == item.gmail_message_id,
+                "attachments": attachments_to_api(message),
             }
         )
 
@@ -418,8 +549,11 @@ async def get_item_detail(item_id: str) -> dict:
         raise ValueError("Item not found")
 
     chat_rows = await list_chat_messages(item_id)
+    sender_context = await get_sender_context(item.sender_email, user_id=item.user_id)
     return {
-        "item": item.to_api_dict(),
+        "item": item.to_api_dict(
+            always_urgent=bool(sender_context and sender_context.always_urgent)
+        ),
         "chatMessages": [row.to_api_dict() for row in chat_rows],
     }
 
@@ -427,4 +561,9 @@ async def get_item_detail(item_id: str) -> dict:
 async def list_items() -> list[dict]:
     await cleanup_bad_queue_items()
     items = await list_active_items()
-    return [item.to_api_dict() for item in items]
+    result: list[dict] = []
+    for item in items:
+        context = await get_sender_context(item.sender_email, user_id=item.user_id)
+        always_urgent = bool(context and context.always_urgent)
+        result.append(item.to_api_dict(always_urgent=always_urgent))
+    return result

@@ -9,12 +9,24 @@ export type EmailAgentItem = {
   gmailUrl: string;
   draftResponse: string;
   status: EmailAgentStatus;
+  alwaysUrgent?: boolean;
+  schedulingDetected?: boolean;
+  calendarChecked?: boolean;
+  calendarConnected?: boolean;
 };
 
 export type DraftChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+};
+
+export type EmailThreadAttachment = {
+  filename: string;
+  mimeType: string;
+  size: number;
+  extractedTextPreview?: string | null;
+  extractNote?: string | null;
 };
 
 export type EmailThreadMessage = {
@@ -26,6 +38,7 @@ export type EmailThreadMessage = {
   body: string;
   isInbound: boolean;
   isTarget: boolean;
+  attachments?: EmailThreadAttachment[];
 };
 
 export type EmailThreadDetail = {

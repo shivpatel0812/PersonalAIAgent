@@ -9,7 +9,17 @@ import {
   fetchEmailAgentThread,
   scanEmailAgentInbox,
 } from "../../lib/api/emailAgent";
-import type { DraftChatMessage, EmailAgentItem, EmailThreadDetail } from "../../types/emailAgent";
+import {
+  fetchUserEmailProfile,
+  saveUserEmailProfile,
+} from "../../lib/api/userProfile";
+import type {
+  DraftChatMessage,
+  EmailAgentItem,
+  EmailThreadAttachment,
+  EmailThreadDetail,
+} from "../../types/emailAgent";
+import type { UserEmailProfile } from "../../types/userProfile";
 
 const STATUS_LABELS = {
   needs_draft: "Drafting…",
@@ -42,7 +52,23 @@ export function EmailAgentPanel({
   const [error, setError] = useState<string | null>(null);
   const [expandedIncoming, setExpandedIncoming] = useState<Record<string, boolean>>({});
   const [threadByItem, setThreadByItem] = useState<Record<string, EmailThreadDetail>>({});
+  const [expandedPdfPreview, setExpandedPdfPreview] = useState<Record<string, boolean>>({});
   const [loadingThreadFor, setLoadingThreadFor] = useState<string | null>(null);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const [profile, setProfile] = useState<UserEmailProfile | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  function formatAttachmentSize(size: number): string {
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function togglePdfPreview(messageId: string, filename: string) {
+    const key = `${messageId}:${filename}`;
+    setExpandedPdfPreview((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
 
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) ?? items[0],
@@ -55,6 +81,9 @@ export function EmailAgentPanel({
     const detail = await fetchEmailAgentItem(itemId);
     setDrafts((prev) => ({ ...prev, [itemId]: detail.item.draftResponse }));
     setChatByEmail((prev) => ({ ...prev, [itemId]: detail.chatMessages }));
+    setItems((prev) =>
+      prev.map((item) => (item.id === itemId ? { ...item, ...detail.item } : item))
+    );
   }, []);
 
   const loadQueue = useCallback(async () => {
@@ -82,6 +111,35 @@ export function EmailAgentPanel({
   useEffect(() => {
     void loadQueue();
   }, [loadQueue]);
+
+  useEffect(() => {
+    void fetchUserEmailProfile()
+      .then(setProfile)
+      .catch(() => undefined);
+  }, []);
+
+  async function handleSaveProfile() {
+    if (!profile) return;
+    setSavingProfile(true);
+    setProfileSaved(false);
+    setError(null);
+    try {
+      const saved = await saveUserEmailProfile({
+        displayName: profile.displayName,
+        roleTitle: profile.roleTitle,
+        communicationStyle: profile.communicationStyle,
+        defaultSignOff: profile.defaultSignOff,
+        expertiseAreas: profile.expertiseAreas,
+        timezone: profile.timezone,
+      });
+      setProfile(saved);
+      setProfileSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save reply preferences");
+    } finally {
+      setSavingProfile(false);
+    }
+  }
 
   async function handleSelectItem(itemId: string) {
     setSelectedId(itemId);
@@ -210,6 +268,93 @@ export function EmailAgentPanel({
         oauthErrorMessage={googleOauthError}
       />
 
+      <div className="border-b border-slate-800 px-4 py-2">
+        <button
+          type="button"
+          onClick={() => setPrefsOpen((open) => !open)}
+          className="text-xs text-slate-400 transition hover:text-slate-200"
+        >
+          {prefsOpen ? "Hide reply preferences" : "Reply preferences"}
+        </button>
+        {prefsOpen && profile && (
+          <div className="mt-3 grid gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4 md:grid-cols-2">
+            <label className="block text-xs text-slate-500">
+              Display name
+              <input
+                value={profile.displayName}
+                onChange={(e) =>
+                  setProfile({ ...profile, displayName: e.target.value })
+                }
+                className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:border-slate-700"
+              />
+            </label>
+            <label className="block text-xs text-slate-500">
+              Role / title
+              <input
+                value={profile.roleTitle}
+                onChange={(e) =>
+                  setProfile({ ...profile, roleTitle: e.target.value })
+                }
+                className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:border-slate-700"
+              />
+            </label>
+            <label className="block text-xs text-slate-500 md:col-span-2">
+              Communication style
+              <textarea
+                value={profile.communicationStyle}
+                onChange={(e) =>
+                  setProfile({ ...profile, communicationStyle: e.target.value })
+                }
+                rows={2}
+                placeholder="e.g. concise and direct, warm and casual"
+                className="mt-1 w-full resize-none rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:border-slate-700"
+              />
+            </label>
+            <label className="block text-xs text-slate-500">
+              Default sign-off
+              <input
+                value={profile.defaultSignOff}
+                onChange={(e) =>
+                  setProfile({ ...profile, defaultSignOff: e.target.value })
+                }
+                placeholder="Best, Shiv"
+                className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:border-slate-700"
+              />
+            </label>
+            <label className="block text-xs text-slate-500">
+              Expertise areas (comma-separated)
+              <input
+                value={profile.expertiseAreas.join(", ")}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    expertiseAreas: e.target.value
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean),
+                  })
+                }
+                placeholder="FOIA, real estate, software"
+                className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:border-slate-700"
+              />
+            </label>
+            <div className="flex items-center gap-3 md:col-span-2">
+              <button
+                type="button"
+                onClick={() => void handleSaveProfile()}
+                disabled={savingProfile}
+                className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 transition hover:border-slate-600 disabled:opacity-50"
+              >
+                {savingProfile ? "Saving…" : "Save preferences"}
+              </button>
+              {profileSaved && (
+                <span className="text-xs text-emerald-400">Saved</span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       {error && (
         <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2">
           <p className="text-xs text-red-300">{error}</p>
@@ -265,6 +410,9 @@ export function EmailAgentPanel({
                   >
                     <p className="truncate text-sm font-medium text-slate-100">
                       {item.senderName}
+                      {item.alwaysUrgent && (
+                        <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-400" title="Always urgent sender" />
+                      )}
                     </p>
                     <p className="mt-1 truncate text-xs text-slate-500">{item.subject}</p>
                     <p className="mt-2 text-[10px] text-slate-600">
@@ -342,6 +490,56 @@ export function EmailAgentPanel({
                             <pre className="mt-2 whitespace-pre-wrap font-sans text-sm leading-6 text-slate-300">
                               {message.body}
                             </pre>
+                            {message.attachments && message.attachments.length > 0 && (
+                              <div className="mt-3 space-y-2 border-t border-slate-800 pt-3">
+                                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                  Attachments
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  {message.attachments.map((attachment: EmailThreadAttachment) => (
+                                    <span
+                                      key={`${message.id}-${attachment.filename}`}
+                                      className="rounded-full border border-slate-700 bg-slate-950 px-2.5 py-1 text-[11px] text-slate-400"
+                                    >
+                                      {attachment.filename} ({formatAttachmentSize(attachment.size)})
+                                    </span>
+                                  ))}
+                                </div>
+                                {message.attachments.map((attachment: EmailThreadAttachment) => {
+                                  if (!attachment.extractedTextPreview && !attachment.extractNote) {
+                                    return null;
+                                  }
+                                  const previewKey = `${message.id}:${attachment.filename}`;
+                                  const isOpen = expandedPdfPreview[previewKey];
+                                  return (
+                                    <div
+                                      key={`${message.id}-${attachment.filename}-preview`}
+                                      className="rounded-lg border border-slate-800 bg-slate-950/80"
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => togglePdfPreview(message.id, attachment.filename)}
+                                        className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-slate-400 transition hover:text-slate-200"
+                                      >
+                                        <span>
+                                          {attachment.extractedTextPreview
+                                            ? `PDF preview: ${attachment.filename}`
+                                            : attachment.extractNote}
+                                        </span>
+                                        {attachment.extractedTextPreview && (
+                                          <span>{isOpen ? "Hide" : "Show"}</span>
+                                        )}
+                                      </button>
+                                      {isOpen && attachment.extractedTextPreview && (
+                                        <pre className="max-h-48 overflow-y-auto border-t border-slate-800 px-3 py-2 whitespace-pre-wrap font-sans text-xs leading-5 text-slate-400">
+                                          {attachment.extractedTextPreview}
+                                        </pre>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -364,6 +562,15 @@ export function EmailAgentPanel({
                   <p className="mb-2 mt-8 text-[11px] font-medium uppercase tracking-wider text-slate-500">
                     Draft response
                   </p>
+                  {selected.schedulingDetected && (
+                    <p className="mb-2 text-xs text-slate-500">
+                      {selected.calendarChecked
+                        ? "Calendar checked for scheduling"
+                        : selected.calendarConnected === false
+                          ? "Connect Google Calendar for availability when scheduling"
+                          : "Scheduling detected"}
+                    </p>
+                  )}
                   <textarea
                     value={drafts[selected.id] ?? ""}
                     onChange={(event) =>

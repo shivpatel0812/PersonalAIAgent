@@ -36,8 +36,11 @@ class EmailAgentItem:
         self.updated_at = row.get("updated_at")
         self.sent_at = row.get("sent_at")
         self.sent_gmail_message_id = row.get("sent_gmail_message_id")
+        self.thread_context_summary = row.get("thread_context_summary")
+        self.draft_context_meta = row.get("draft_context_meta") or {}
 
-    def to_api_dict(self) -> dict[str, Any]:
+    def to_api_dict(self, *, always_urgent: bool = False) -> dict[str, Any]:
+        meta = self.draft_context_meta or {}
         return {
             "id": str(self.id),
             "senderName": self.sender_name or self.sender_email,
@@ -47,6 +50,10 @@ class EmailAgentItem:
             "gmailUrl": f"https://mail.google.com/mail/u/0/#inbox/{self.gmail_message_id}",
             "draftResponse": self.draft_response or "",
             "status": self.status,
+            "alwaysUrgent": always_urgent,
+            "schedulingDetected": bool(meta.get("schedulingDetected")),
+            "calendarChecked": bool(meta.get("calendarChecked")),
+            "calendarConnected": bool(meta.get("calendarConnected")),
         }
 
 

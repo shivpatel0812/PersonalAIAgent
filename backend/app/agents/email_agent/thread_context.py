@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
+from app.agents.email_agent import settings as agent_settings
+from app.agents.email_agent.attachments import format_attachment_lines
 from app.ai.tools.gmail_tool import EmailThreadConversation, ThreadMessage
 
-MAX_PROMPT_CHARS = 28_000
-PER_MESSAGE_BODY_CHARS = 4_000
+
+@dataclass
+class ThreadSelection:
+    selected: list[ThreadMessage]
+    omitted_middle: bool
+    middle_messages: list[ThreadMessage]
+    middle_start_index: int
+    middle_end_index: int
 
 
 def _normalize_email(email: str) -> str:
@@ -22,39 +31,89 @@ def _is_user_message(from_email: str, account_email: str) -> bool:
     return _normalize_email(account_email) in _normalize_email(from_email)
 
 
-def _trim_body(body: str, limit: int = PER_MESSAGE_BODY_CHARS) -> str:
+def _message_char_weight(message: ThreadMessage, per_message_limit: int) -> int:
+    body_len = min(len(message.body.strip()), per_message_limit)
+    attachment_len = sum(
+        len(line) for line in format_attachment_lines(message)
+    )
+    return body_len + attachment_len + 200
+
+
+def _trim_body(body: str, limit: int) -> str:
     body = body.strip()
     if len(body) <= limit:
         return body
     return body[:limit] + "\n...[truncated]"
 
 
-def _select_messages_for_prompt(
+def select_messages_for_prompt(
     messages: list[ThreadMessage],
-) -> tuple[list[ThreadMessage], bool]:
-    """Return messages to include, and whether middle messages were omitted."""
+    *,
+    max_prompt_chars: int | None = None,
+    per_message_limit: int | None = None,
+) -> ThreadSelection:
+    """Return messages to include and any omitted middle slice."""
+    max_prompt_chars = max_prompt_chars or agent_settings.MAX_PROMPT_CHARS
+    per_message_limit = per_message_limit or agent_settings.PER_MESSAGE_BODY_CHARS
+
     if not messages:
-        return [], False
+        return ThreadSelection([], False, [], 0, 0)
 
-    chunks: list[str] = []
-    for message in messages:
-        chunks.append(_trim_body(message.body))
-
-    total = sum(len(chunk) for chunk in chunks)
-    if total <= MAX_PROMPT_CHARS:
-        return messages, False
-
-    # Long thread: keep opening context + recent back-and-forth
-    if len(messages) <= 12:
-        return messages, False
+    total = sum(_message_char_weight(message, per_message_limit) for message in messages)
+    if total <= max_prompt_chars or len(messages) <= 12:
+        return ThreadSelection(messages, False, [], 0, 0)
 
     head = messages[:2]
     tail = messages[-10:]
-    omitted = len(messages) - len(head) - len(tail)
-    if omitted <= 0:
-        return messages, False
+    middle = messages[2:-10]
+    if not middle:
+        return ThreadSelection(messages, False, [], 0, 0)
 
-    return head + tail, True
+    return ThreadSelection(
+        selected=head + tail,
+        omitted_middle=True,
+        middle_messages=middle,
+        middle_start_index=3,
+        middle_end_index=len(messages) - 10,
+    )
+
+
+def format_messages_compact(messages: list[ThreadMessage]) -> str:
+    lines: list[str] = []
+    for index, message in enumerate(messages, start=1):
+        attachment_text = "\n".join(format_attachment_lines(message))
+        lines.append(
+            f"[Email {index}]\n"
+            f"From: {message.from_email}\n"
+            f"Date: {message.date}\n"
+            f"Subject: {message.subject}\n"
+            f"{_trim_body(message.body, 1500)}\n"
+            f"{attachment_text}\n"
+        )
+    return "\n---\n".join(lines)
+
+
+def _resolve_middle_summary(
+    selection: ThreadSelection,
+    cached_summary: str | None,
+) -> str | None:
+    if not selection.omitted_middle:
+        return None
+    if cached_summary:
+        return cached_summary
+    if not agent_settings.MIDDLE_SUMMARY_ENABLED or not selection.middle_messages:
+        skipped = len(selection.middle_messages)
+        return (
+            f"[Note: {skipped} older middle messages omitted for length — "
+            "key opening messages and recent replies are included below.]"
+        )
+    from app.agents.email_agent.thread_summarizer import summarize_omitted_messages
+
+    return summarize_omitted_messages(
+        selection.middle_messages,
+        start_index=selection.middle_start_index,
+        end_index=selection.middle_end_index,
+    )
 
 
 def format_thread_for_reply(
@@ -62,27 +121,55 @@ def format_thread_for_reply(
     *,
     account_email: str,
     reply_to_message_id: str | None = None,
-) -> str:
+    max_prompt_chars: int | None = None,
+    per_message_limit: int | None = None,
+    include_attachment_text: bool = True,
+    cached_middle_summary: str | None = None,
+    sender_history_block: str = "",
+) -> tuple[str, str | None]:
     """
     Build chronological thread context for drafting.
 
-    Labels the user's prior messages and the specific inbound message being replied to.
+    Returns (prompt_text, middle_summary_for_cache).
     """
-    selected, omitted_middle = _select_messages_for_prompt(conversation.messages)
+    per_message_limit = per_message_limit or agent_settings.PER_MESSAGE_BODY_CHARS
+    selection = select_messages_for_prompt(
+        conversation.messages,
+        max_prompt_chars=max_prompt_chars,
+        per_message_limit=per_message_limit,
+    )
+    middle_summary = _resolve_middle_summary(selection, cached_middle_summary)
+
     lines: list[str] = []
+    if sender_history_block:
+        lines.append(sender_history_block)
+        lines.append("")
 
-    if omitted_middle:
-        skipped = len(conversation.messages) - len(selected)
-        lines.append(
-            f"[Note: {skipped} older middle messages omitted for length — "
-            "key opening messages and recent replies are included below.]\n"
-        )
+    if middle_summary:
+        lines.append(middle_summary)
+        lines.append("")
 
-    for index, message in enumerate(selected, start=1):
+    total_messages = len(conversation.messages)
+    head_count = 2 if selection.omitted_middle else 0
+    tail_start = total_messages - (len(selection.selected) - head_count) + 1 if selection.omitted_middle else 1
+
+    for position, message in enumerate(selection.selected):
+        if selection.omitted_middle and position < head_count:
+            index = position + 1
+        elif selection.omitted_middle:
+            index = tail_start + (position - head_count)
+        else:
+            index = position + 1
+
         role = "YOUR PRIOR MESSAGE" if _is_user_message(message.from_email, account_email) else "INBOUND"
         target_marker = ""
         if reply_to_message_id and message.email_id == reply_to_message_id:
             target_marker = " <<< REPLY TO THIS MESSAGE >>>"
+
+        attachment_lines = format_attachment_lines(message) if include_attachment_text else []
+        attachment_block = ""
+        if attachment_lines:
+            attachment_block = "\n" + "\n".join(attachment_lines)
 
         lines.append(
             f"[Email {index} | {role}{target_marker}]\n"
@@ -90,10 +177,12 @@ def format_thread_for_reply(
             f"To: {message.to_email or ''}\n"
             f"Date: {message.date}\n"
             f"Subject: {message.subject}\n\n"
-            f"{_trim_body(message.body)}\n"
+            f"{_trim_body(message.body, per_message_limit)}"
+            f"{attachment_block}\n"
         )
 
-    return "\n---\n".join(lines)
+    summary_to_cache = middle_summary if selection.omitted_middle and not cached_middle_summary else None
+    return "\n---\n".join(lines), summary_to_cache
 
 
 DRAFT_SYSTEM_PROMPT = """You draft email replies for the user to review before sending.
@@ -106,7 +195,8 @@ Critical rules:
 - Write a complete, send-ready plain-text reply
 - Match a professional but natural tone
 - Do not invent facts; if unsure, keep the reply appropriately vague
-- Sign off with the user's first name if you can infer it from their email, otherwise "Best,"
+- Sign off with the user's configured sign-off from the profile block; match their communication style
+- When a calendar availability block is present, use only those times — do not invent availability
 
 Return ONLY valid JSON: {"summary": "...", "draft": "..."}
 """

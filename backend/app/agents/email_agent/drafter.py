@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from app.agents.email_agent import settings as agent_settings
 from app.agents.email_agent.json_utils import parse_json_response
 from app.agents.email_agent.thread_context import (
     CLASSIFY_SYSTEM_PROMPT,
@@ -17,6 +18,23 @@ from app.ai.tools.gmail_tool import EmailThreadConversation
 logger = logging.getLogger(__name__)
 
 
+def _prepend_context_blocks(
+    *,
+    profile_block: str,
+    sender_context_block: str,
+    calendar_block: str,
+    body: str,
+) -> str:
+    prefix_parts = [
+        block.strip()
+        for block in (profile_block, sender_context_block, calendar_block)
+        if block and block.strip()
+    ]
+    if not prefix_parts:
+        return body
+    return "\n\n".join(prefix_parts) + "\n\n" + body
+
+
 def generate_initial_draft(
     *,
     conversation: EmailThreadConversation,
@@ -24,20 +42,32 @@ def generate_initial_draft(
     sender_name: str,
     sender_email: str,
     reply_to_message_id: str | None = None,
-) -> tuple[str, str]:
-    """Return (summary, draft_response)."""
-    thread_text = format_thread_for_reply(
+    cached_middle_summary: str | None = None,
+    sender_history_block: str = "",
+    profile_block: str = "",
+    sender_context_block: str = "",
+    calendar_block: str = "",
+) -> tuple[str, str, str | None]:
+    """Return (summary, draft_response, middle_summary_to_cache)."""
+    thread_text, summary_to_cache = format_thread_for_reply(
         conversation,
         account_email=account_email,
         reply_to_message_id=reply_to_message_id,
+        cached_middle_summary=cached_middle_summary,
+        sender_history_block=sender_history_block,
     )
 
-    user_prompt = (
-        f"The user is replying from {account_email}.\n"
-        f"Reply to: {sender_name} <{sender_email}>\n"
-        f"Subject: {conversation.subject}\n"
-        f"Messages in thread: {conversation.message_count}\n\n"
-        f"Full conversation (oldest to newest):\n{thread_text}"
+    user_prompt = _prepend_context_blocks(
+        profile_block=profile_block,
+        sender_context_block=sender_context_block,
+        calendar_block=calendar_block,
+        body=(
+            f"The user is replying from {account_email}.\n"
+            f"Reply to: {sender_name} <{sender_email}>\n"
+            f"Subject: {conversation.subject}\n"
+            f"Messages in thread: {conversation.message_count}\n\n"
+            f"Full conversation (oldest to newest):\n{thread_text}"
+        ),
     )
 
     response = chat_messages(
@@ -52,7 +82,7 @@ def generate_initial_draft(
     draft = str(result.get("draft", "")).strip()
     if not draft:
         raise ValueError("Model returned an empty draft")
-    return summary, draft
+    return summary, draft, summary_to_cache
 
 
 def revise_draft(
@@ -63,26 +93,38 @@ def revise_draft(
     chat_history: list[dict[str, str]],
     user_message: str,
     reply_to_message_id: str | None = None,
+    cached_middle_summary: str | None = None,
+    sender_history_block: str = "",
+    profile_block: str = "",
+    sender_context_block: str = "",
+    calendar_block: str = "",
 ) -> tuple[str, str]:
     """Return (revised_draft, assistant_acknowledgment)."""
     history_text = "\n".join(
         f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-10:]
     )
 
-    thread_text = format_thread_for_reply(
+    thread_text, _ = format_thread_for_reply(
         conversation,
         account_email=account_email,
         reply_to_message_id=reply_to_message_id,
+        cached_middle_summary=cached_middle_summary,
+        sender_history_block=sender_history_block,
     )
 
-    user_prompt = (
-        f"Account: {account_email}\n"
-        f"Subject: {conversation.subject}\n"
-        f"Messages in thread: {conversation.message_count}\n\n"
-        f"Full conversation (oldest to newest):\n{thread_text}\n\n"
-        f"Current draft:\n{current_draft}\n\n"
-        f"Adjustment chat:\n{history_text}\n\n"
-        f"Latest user request:\n{user_message}"
+    user_prompt = _prepend_context_blocks(
+        profile_block=profile_block,
+        sender_context_block=sender_context_block,
+        calendar_block=calendar_block,
+        body=(
+            f"Account: {account_email}\n"
+            f"Subject: {conversation.subject}\n"
+            f"Messages in thread: {conversation.message_count}\n\n"
+            f"Full conversation (oldest to newest):\n{thread_text}\n\n"
+            f"Current draft:\n{current_draft}\n\n"
+            f"Adjustment chat:\n{history_text}\n\n"
+            f"Latest user request:\n{user_message}"
+        ),
     )
 
     response = chat_messages(
@@ -117,10 +159,12 @@ def classify_needs_reply(
     reply_to_message_id: str | None = None,
 ) -> tuple[bool, str]:
     """Use AI to decide if this email needs a human-written reply."""
-    thread_text = format_thread_for_reply(
+    thread_text, _ = format_thread_for_reply(
         conversation,
         account_email=account_email,
         reply_to_message_id=reply_to_message_id,
+        max_prompt_chars=agent_settings.CLASSIFY_MAX_PROMPT_CHARS,
+        include_attachment_text=False,
     )
 
     user_prompt = (
