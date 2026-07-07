@@ -42,6 +42,16 @@ export function GoogleCalendarPanel({ refreshKey = 0 }: GoogleCalendarPanelProps
     loadData();
   }, [refreshKey]);
 
+  // Refresh after OAuth redirect
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('google_calendar') === 'connected') {
+      loadData();
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
+
   async function handleDeleteAccount(accountId: string) {
     if (!confirm("Are you sure you want to disconnect this account?")) return;
     try {
