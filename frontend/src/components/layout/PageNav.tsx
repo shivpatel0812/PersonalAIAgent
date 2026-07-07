@@ -8,11 +8,11 @@ type PageNavProps = {
 
 export function PageNav({ pages, activePage, onSelect }: PageNavProps) {
   return (
-    <aside className="fixed left-0 top-0 z-20 flex h-screen w-72 flex-col border-r border-slate-800 bg-slate-950/95 backdrop-blur">
+    <aside className="flex h-screen w-72 shrink-0 flex-col border-r border-slate-800 bg-slate-950/95 backdrop-blur">
       <div className="border-b border-slate-800 px-4 py-4">
         <p className="text-sm font-medium text-slate-200">Research pages</p>
         <p className="mt-1 text-xs text-slate-500">
-          Each page keeps its own conversation thread.
+          Each page has its own chats. Memory is shared across all of them.
         </p>
       </div>
 

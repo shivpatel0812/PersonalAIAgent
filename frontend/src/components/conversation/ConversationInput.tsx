@@ -4,6 +4,7 @@ type ConversationInputProps = {
   value: string;
   placeholder: string;
   loading: boolean;
+  disabled?: boolean;
   onChange: (value: string) => void;
   onSubmit: () => void;
 };
@@ -12,11 +13,14 @@ export function ConversationInput({
   value,
   placeholder,
   loading,
+  disabled = false,
   onChange,
   onSubmit,
 }: ConversationInputProps) {
+  const isDisabled = loading || disabled;
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !loading) {
+    if (event.key === "Enter" && !event.shiftKey && !isDisabled) {
       event.preventDefault();
       onSubmit();
     }
@@ -30,14 +34,14 @@ export function ConversationInput({
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          disabled={loading}
+          disabled={isDisabled}
           rows={2}
           className="max-h-40 min-h-[3rem] flex-1 resize-y bg-transparent text-base text-slate-100 outline-none placeholder:text-slate-600 disabled:opacity-60"
         />
         <button
           type="button"
           onClick={onSubmit}
-          disabled={loading || !value.trim()}
+          disabled={isDisabled || !value.trim()}
           aria-label="Send message"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
         >

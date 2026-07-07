@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useResearchSettings } from "../context/ResearchSettingsContext";
+import { useChatThreads } from "../hooks/useChatThreads";
 import { useConversation } from "../hooks/useConversation";
 import { PageNav } from "../components/layout/PageNav";
+import { ChatSidebar } from "../components/conversation/ChatSidebar";
 import { ConversationThread } from "../components/conversation/ConversationThread";
 import { ConversationInput } from "../components/conversation/ConversationInput";
 import { MemoryPanel } from "../components/research/MemoryPanel";
@@ -17,6 +19,16 @@ export function ConversationPage() {
   const pageConfig = getPageConfig(activePage);
 
   const {
+    threads,
+    activeThreadId,
+    loadingThreads,
+    error: threadsError,
+    selectThread,
+    createNewChat,
+    removeThread,
+  } = useChatThreads(activePage);
+
+  const {
     messages,
     status,
     error,
@@ -25,10 +37,12 @@ export function ConversationPage() {
     loadingConversation,
     pendingQuestion,
     submitMessage,
-  } = useConversation(activePage);
+    clearMessages,
+  } = useConversation(activePage, activeThreadId);
 
   const [input, setInput] = useState("");
   const isLoading = status === "loading";
+  const displayError = error ?? threadsError;
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -45,6 +59,17 @@ export function ConversationPage() {
     }
   }, [activePage]);
 
+  const handleNewChat = () => {
+    void (async () => {
+      clearMessages();
+      await createNewChat();
+    })();
+  };
+
+  const handleDeleteChat = (threadId: string) => {
+    void removeThread(threadId);
+  };
+
   const handleSubmit = () => {
     const question = input;
     setInput("");
@@ -59,7 +84,16 @@ export function ConversationPage() {
         onSelect={setActivePage}
       />
 
-      <div className="ml-72 flex min-h-screen flex-1 flex-col">
+      <ChatSidebar
+        threads={threads}
+        activeThreadId={activeThreadId}
+        loading={loadingThreads}
+        onSelect={selectThread}
+        onNewChat={handleNewChat}
+        onDelete={handleDeleteChat}
+      />
+
+      <div className="flex min-h-screen flex-1 flex-col">
         <header className="border-b border-slate-800 px-6 py-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-slate-500">
             Probe research agent
@@ -69,7 +103,11 @@ export function ConversationPage() {
         </header>
 
         <div className="flex flex-1 flex-col px-6">
-          {error && <div className="pt-4"><ErrorBanner message={error} /></div>}
+          {displayError && (
+            <div className="pt-4">
+              <ErrorBanner message={displayError} />
+            </div>
+          )}
 
           {activePage === "personal" && (
             <div className="pt-4">
@@ -85,7 +123,7 @@ export function ConversationPage() {
 
           <ConversationThread
             messages={messages}
-            loadingConversation={loadingConversation}
+            loadingConversation={loadingConversation || loadingThreads}
             isResearching={isLoading}
             pendingQuestion={pendingQuestion}
             streamingSteps={streamingSteps}
@@ -100,6 +138,7 @@ export function ConversationPage() {
                 : pageConfig.placeholder
             }
             loading={isLoading}
+            disabled={!activeThreadId}
             onChange={setInput}
             onSubmit={handleSubmit}
           />

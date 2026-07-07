@@ -14,9 +14,15 @@ from app.db.conversation_threads import (
     PAGE_CONTEXT,
     VALID_PAGE_TYPES,
     append_conversation_turn,
+    create_thread,
+    delete_thread,
     format_history_for_agent,
     get_conversation,
+    get_conversation_by_thread_id,
     get_or_create_thread,
+    get_thread_by_id,
+    get_thread_messages,
+    list_threads,
     validate_page_type,
 )
 
@@ -50,6 +56,7 @@ class ResearchRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     max_iterations: int = Field(default=5, ge=1, le=25)
     page_type: str | None = Field(default=None, max_length=32)
+    thread_id: str | None = Field(default=None, max_length=64)
 
 
 class ResearchResponse(BaseModel):
@@ -69,25 +76,49 @@ def _load_research_memory(question: str) -> tuple[str | None, list[PastRunMemory
     return format_memory_context(memory_runs), memory_runs
 
 
-def _load_conversation_context(page_type: str | None) -> tuple[
-    list[dict[str, str]] | None, str | None, str | None
-]:
+def _resolve_thread_id(page_type: str | None, thread_id: str | None) -> str | None:
+    if thread_id:
+        thread = get_thread_by_id(thread_id)
+        if thread is None:
+            raise ValueError(f"Thread not found: {thread_id}")
+        return thread["id"]
+
     if not page_type:
+        return None
+
+    page_type = validate_page_type(page_type)
+    return get_or_create_thread(page_type)["id"]
+
+
+def _load_conversation_context(
+    page_type: str | None,
+    thread_id: str | None = None,
+) -> tuple[list[dict[str, str]] | None, str | None, str | None]:
+    if not page_type and not thread_id:
         return None, None, None
 
     try:
-        page_type = validate_page_type(page_type)
-        thread = get_or_create_thread(page_type)
-        messages = get_conversation(page_type)["messages"]
+        resolved_thread_id = _resolve_thread_id(page_type, thread_id)
+        if resolved_thread_id is None:
+            return None, None, None
+
+        thread = get_thread_by_id(resolved_thread_id)
+        if thread is None:
+            raise ValueError(f"Thread not found: {resolved_thread_id}")
+
+        resolved_page_type = validate_page_type(thread["page_type"])
+        messages = get_thread_messages(resolved_thread_id)
         history = format_history_for_agent(messages)
-        return history, PAGE_CONTEXT[page_type], thread["id"]
+        return history, PAGE_CONTEXT[resolved_page_type], resolved_thread_id
     except Exception as exc:
         print(f"Failed to load conversation context: {exc}")
-        try:
-            page_type = validate_page_type(page_type)
-            return None, PAGE_CONTEXT[page_type], None
-        except ValueError:
-            return None, None, None
+        if page_type:
+            try:
+                validated = validate_page_type(page_type)
+                return None, PAGE_CONTEXT[validated], thread_id
+            except ValueError:
+                pass
+        return None, None, thread_id
 
 
 class AgentRunSummary(BaseModel):
@@ -119,6 +150,19 @@ class ConversationResponse(BaseModel):
     title: str
     updated_at: str
     messages: list[ConversationMessage]
+
+
+class ThreadSummary(BaseModel):
+    id: str
+    page_type: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class CreateThreadRequest(BaseModel):
+    page_type: str = Field(min_length=1, max_length=32)
+    title: str | None = Field(default=None, max_length=120)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -160,7 +204,9 @@ def ai_research(body: ResearchRequest) -> ResearchResponse:
         raise HTTPException(status_code=503, detail="Tavily API key is not configured")
 
     memory_context, memory_runs = _load_research_memory(body.question)
-    conversation_history, page_context, thread_id = _load_conversation_context(body.page_type)
+    conversation_history, page_context, thread_id = _load_conversation_context(
+        body.page_type, body.thread_id
+    )
 
     try:
         result = run_agent(
@@ -214,7 +260,9 @@ def ai_research_stream(body: ResearchRequest):
         raise HTTPException(status_code=503, detail="Tavily API key is not configured")
 
     memory_context, memory_runs = _load_research_memory(body.question)
-    conversation_history, page_context, thread_id = _load_conversation_context(body.page_type)
+    conversation_history, page_context, thread_id = _load_conversation_context(
+        body.page_type, body.thread_id
+    )
 
     def event_generator():
         try:
@@ -275,6 +323,66 @@ def ai_research_stream(body: ResearchRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/threads", response_model=list[ThreadSummary])
+def ai_list_threads(page_type: str, limit: int = 50) -> list[ThreadSummary]:
+    if page_type not in VALID_PAGE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid page_type: {page_type}")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+
+    try:
+        threads = list_threads(page_type, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to list threads: {exc}") from exc
+
+    return [ThreadSummary(**thread) for thread in threads]
+
+
+@router.post("/threads", response_model=ThreadSummary)
+def ai_create_thread(body: CreateThreadRequest) -> ThreadSummary:
+    if body.page_type not in VALID_PAGE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid page_type: {body.page_type}")
+
+    try:
+        thread = create_thread(body.page_type, title=body.title)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to create thread: {exc}") from exc
+
+    return ThreadSummary(**thread)
+
+
+@router.get("/threads/{thread_id}", response_model=ConversationResponse)
+def ai_get_thread(thread_id: str) -> ConversationResponse:
+    try:
+        conversation = get_conversation_by_thread_id(thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to load thread: {exc}") from exc
+
+    return ConversationResponse(
+        thread_id=conversation["thread_id"],
+        page_type=conversation["page_type"],
+        title=conversation["title"],
+        updated_at=conversation["updated_at"],
+        messages=[ConversationMessage(**message) for message in conversation["messages"]],
+    )
+
+
+@router.delete("/threads/{thread_id}")
+def ai_delete_thread(thread_id: str) -> dict[str, str]:
+    thread = get_thread_by_id(thread_id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    try:
+        delete_thread(thread_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to delete thread: {exc}") from exc
+
+    return {"status": "deleted", "thread_id": thread_id}
 
 
 @router.get("/conversations/{page_type}", response_model=ConversationResponse)

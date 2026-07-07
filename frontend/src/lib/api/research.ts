@@ -5,6 +5,7 @@ export type ResearchRequest = {
   question: string;
   max_iterations: number;
   page_type?: string;
+  thread_id?: string;
 };
 
 export async function postResearch(body: ResearchRequest): Promise<ResearchResponse> {

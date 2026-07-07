@@ -64,8 +64,8 @@ export function ConversationThread({
     return (
       <div className="flex flex-1 items-center justify-center px-6">
         <p className="max-w-md text-center text-sm leading-7 text-slate-500">
-          Start a conversation. Ask a question, then follow up with more — the agent
-          remembers this page&apos;s thread.
+          Start a new chat or pick one from the sidebar. Follow-ups stay in this
+          chat — related past research still comes from shared memory.
         </p>
       </div>
     );

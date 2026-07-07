@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchConversation } from "../lib/api/conversations";
+import { fetchThread } from "../lib/api/conversations";
 import { postResearchStreaming } from "../lib/api/research";
 import type { ConversationMessage, PageType } from "../types/conversation";
 import type { AgentStep, PastRunMemory, ResearchStatus } from "../types/research";
@@ -14,43 +14,57 @@ type UseConversationResult = {
   pendingQuestion: string | null;
   submitMessage: (question: string, maxIterations: number) => Promise<void>;
   reload: () => Promise<void>;
+  clearMessages: () => void;
 };
 
-export function useConversation(pageType: PageType): UseConversationResult {
+export function useConversation(
+  pageType: PageType,
+  threadId: string | null
+): UseConversationResult {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [status, setStatus] = useState<ResearchStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [streamingSteps, setStreamingSteps] = useState<AgentStep[]>([]);
   const [memoryRuns, setMemoryRuns] = useState<PastRunMemory[]>([]);
-  const [loadingConversation, setLoadingConversation] = useState(true);
+  const [loadingConversation, setLoadingConversation] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
 
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+  }, []);
+
   const reload = useCallback(async () => {
+    if (!threadId) {
+      setMessages([]);
+      setLoadingConversation(false);
+      return;
+    }
+
     setLoadingConversation(true);
     try {
-      const conversation = await fetchConversation(pageType);
+      const conversation = await fetchThread(threadId);
       setMessages(conversation.messages);
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load conversation");
       setMessages([]);
     } finally {
       setLoadingConversation(false);
     }
-  }, [pageType]);
+  }, [threadId]);
 
   useEffect(() => {
     setStatus("idle");
-    setError(null);
     setStreamingSteps([]);
     setMemoryRuns([]);
     setPendingQuestion(null);
     void reload();
-  }, [reload]);
+  }, [reload, pageType]);
 
   const submitMessage = useCallback(
     async (question: string, maxIterations: number) => {
       const trimmed = question.trim();
-      if (!trimmed) return;
+      if (!trimmed || !threadId) return;
 
       setPendingQuestion(trimmed);
       setStatus("loading");
@@ -66,6 +80,7 @@ export function useConversation(pageType: PageType): UseConversationResult {
             question: trimmed,
             max_iterations: maxIterations,
             page_type: pageType,
+            thread_id: threadId,
           },
           {
             onMemory: (runs) => setMemoryRuns(runs),
@@ -94,7 +109,7 @@ export function useConversation(pageType: PageType): UseConversationResult {
         setPendingQuestion(null);
       }
     },
-    [pageType, reload]
+    [pageType, reload, threadId]
   );
 
   return {
@@ -107,5 +122,6 @@ export function useConversation(pageType: PageType): UseConversationResult {
     pendingQuestion,
     submitMessage,
     reload,
+    clearMessages,
   };
 }

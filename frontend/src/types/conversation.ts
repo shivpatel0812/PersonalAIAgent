@@ -31,7 +31,7 @@ export const RESEARCH_PAGES: PageConfig[] = [
 ];
 
 export function getPageConfig(pageType: PageType): PageConfig {
-  return RESEARCH_PAGES.find((page) => page.type === pageType) ?? RESEARCH_PAGES[3];
+  return RESEARCH_PAGES.find((page) => page.type === pageType) ?? RESEARCH_PAGES[0];
 }
 
 export type ConversationMessage = {
@@ -42,6 +42,14 @@ export type ConversationMessage = {
   run_id?: string | null;
   source: string;
   created_at: string;
+};
+
+export type ThreadSummary = {
+  id: string;
+  page_type: PageType;
+  title: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type Conversation = {
