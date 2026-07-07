@@ -3,7 +3,6 @@ import {
   deleteAccount,
   fetchAccounts,
   fetchAvailableServices,
-  fetchGoogleCalendarStatus,
   setPrimaryAccount,
   updateAccountLabel,
   type AccountInfo,
