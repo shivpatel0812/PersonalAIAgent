@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import html as html_module
 import re
 from email.mime.text import MIMEText
 from typing import Any
@@ -18,6 +19,25 @@ MAX_BODY_CHARS = 6000
 MAX_THREAD_MESSAGES = 50
 
 
+def _html_to_text(html: str) -> str:
+    """Convert HTML email body to readable plain text."""
+    text = html
+    text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+    text = re.sub(
+        r"<(br|p|div|tr|li|h[1-6]|table)[^>]*>",
+        "\n",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_module.unescape(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
 def _extract_body_from_payload(payload: dict[str, Any]) -> str:
     """Recursively extract plain-text body from a Gmail message payload."""
     mime_type = payload.get("mimeType", "")
@@ -28,13 +48,26 @@ def _extract_body_from_payload(payload: dict[str, Any]) -> str:
 
     if mime_type == "text/html" and body_data and not payload.get("parts"):
         html = base64.urlsafe_b64decode(body_data).decode("utf-8", errors="replace")
-        return re.sub(r"<[^>]+>", " ", html)
+        return _html_to_text(html)
+
+    plain_text = ""
+    html_text = ""
 
     for part in payload.get("parts", []):
-        if part.get("mimeType") == "text/plain":
+        part_mime = part.get("mimeType", "")
+        if part_mime == "text/plain":
             text = _extract_body_from_payload(part)
             if text.strip():
-                return text
+                plain_text = text
+        elif part_mime == "text/html":
+            text = _extract_body_from_payload(part)
+            if text.strip():
+                html_text = text
+
+    if plain_text.strip():
+        return plain_text
+    if html_text.strip():
+        return html_text
 
     for part in payload.get("parts", []):
         text = _extract_body_from_payload(part)
@@ -42,7 +75,10 @@ def _extract_body_from_payload(payload: dict[str, Any]) -> str:
             return text
 
     if body_data:
-        return base64.urlsafe_b64decode(body_data).decode("utf-8", errors="replace")
+        raw = base64.urlsafe_b64decode(body_data).decode("utf-8", errors="replace")
+        if "html" in mime_type.lower():
+            return _html_to_text(raw)
+        return raw
 
     return ""
 

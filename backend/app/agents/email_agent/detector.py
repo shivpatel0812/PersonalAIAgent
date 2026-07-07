@@ -10,8 +10,6 @@ from googleapiclient.discovery import build
 from app.agents.email_agent import settings as agent_settings
 from app.agents.email_recap.gmail import RecapEmail
 from app.agents.email_agent.filters import is_likely_automated
-from app.agents.email_agent.json_utils import parse_json_response
-from app.ai.openai_client import chat_messages
 from app.ai.tools.gmail_tool import _fetch_thread_conversation
 from app.google.oauth import load_credentials
 
@@ -80,76 +78,6 @@ def list_reply_candidates(
         )
 
     return emails
-
-
-def email_needs_reply(
-    *,
-    account_email: str,
-    subject: str,
-    from_email: str,
-    snippet: str,
-    thread_summary: str,
-) -> tuple[bool, str]:
-    """Use AI to decide if this email needs a human-written reply."""
-    system_prompt = """You decide whether an email needs a reply from the user.
-
-Reply YES only when:
-- A real person asked a question or requested action from the user
-- A meeting, deadline, or decision clearly needs the user's response
-- A personal or professional follow-up is expected
-
-Reply NO for:
-- Login alerts, security notices, verification codes, password resets
-- GitHub/Vercel/deployment/CI notifications, receipts, shipping updates
-- Newsletters, marketing, digests, automated system mail, FYI-only messages
-- Anything where replying would go to a no-reply address or is not expected
-
-When unsure, reply NO.
-
-Return ONLY valid JSON:
-{"needs_reply": true, "summary": "1-2 sentence summary of what they want"}
-or
-{"needs_reply": false, "summary": ""}
-"""
-
-    user_prompt = json.dumps(
-        {
-            "account_email": account_email,
-            "from": from_email,
-            "subject": subject,
-            "snippet": snippet,
-            "thread_excerpt": thread_summary[:3000],
-        },
-        indent=2,
-    )
-
-    try:
-        response = chat_messages(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=400,
-        )
-        result = parse_json_response(response)
-        return bool(result.get("needs_reply")), str(result.get("summary", "")).strip()
-    except Exception as exc:
-        logger.warning("needs_reply classification failed: %s", exc)
-        return False, ""
-
-
-def build_thread_excerpt(credentials, thread_id: str) -> str:
-    service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
-    conversation = _fetch_thread_conversation(service, thread_id)
-    lines = []
-    for message in conversation.messages[-6:]:
-        lines.append(
-            f"From: {message.from_email}\n"
-            f"Date: {message.date}\n"
-            f"Subject: {message.subject}\n"
-            f"{message.body[:1200]}\n"
-        )
-    return "\n---\n".join(lines)
 
 
 def get_message_thread_id(credentials, message_id: str) -> str | None:

@@ -9,14 +9,12 @@ from googleapiclient.discovery import build
 
 from app.agents.email_agent import settings as agent_settings
 from app.agents.email_agent.detector import (
-    build_thread_excerpt,
-    email_needs_reply,
     get_message_thread_id,
     is_likely_automated,
     latest_inbound_message_id,
     list_reply_candidates,
 )
-from app.agents.email_agent.drafter import generate_initial_draft, revise_draft
+from app.agents.email_agent.drafter import classify_needs_reply, generate_initial_draft, revise_draft
 from app.agents.email_agent.gmail import send_thread_reply, thread_participant_emails
 from app.ai.config import settings as ai_settings
 from app.ai.tools.gmail_tool import _fetch_thread_conversation
@@ -160,13 +158,16 @@ async def scan_for_reply_candidates() -> dict:
             if inbound_id != candidate.message_id:
                 continue
 
-            excerpt = build_thread_excerpt(credentials, thread_id)
-            needs_reply, summary = email_needs_reply(
+            service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+            conversation = _fetch_thread_conversation(service, thread_id)
+
+            needs_reply, summary = classify_needs_reply(
                 account_email=account.email,
                 subject=candidate.subject,
                 from_email=candidate.from_email,
                 snippet=candidate.snippet,
-                thread_summary=excerpt,
+                conversation=conversation,
+                reply_to_message_id=candidate.message_id,
             )
             if not needs_reply:
                 continue
@@ -224,6 +225,7 @@ async def draft_item(item_id: str) -> EmailAgentItem:
         account_email=account_email,
         sender_name=item.sender_name or item.sender_email,
         sender_email=item.sender_email,
+        reply_to_message_id=item.gmail_message_id,
     )
 
     updated = await update_item(
@@ -276,6 +278,7 @@ async def adjust_item_draft(item_id: str, message: str) -> dict:
         current_draft=item.draft_response or "",
         chat_history=chat_history,
         user_message=message,
+        reply_to_message_id=item.gmail_message_id,
     )
 
     await update_item(item_id, draft_response=revised_draft, status="draft_ready")
