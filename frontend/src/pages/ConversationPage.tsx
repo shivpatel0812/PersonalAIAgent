@@ -16,6 +16,8 @@ export function ConversationPage() {
   const { maxSearches } = useResearchSettings();
   const [activePage, setActivePage] = useState<PageType>("general");
   const [googleRefreshKey, setGoogleRefreshKey] = useState(0);
+  const [googleOauthReturn, setGoogleOauthReturn] = useState<"connected" | "error" | null>(null);
+  const [googleOauthError, setGoogleOauthError] = useState<string | null>(null);
   const pageConfig = getPageConfig(activePage);
 
   const {
@@ -47,17 +49,26 @@ export function ConversationPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const googleStatus = params.get("google_calendar");
-    if (googleStatus) {
+    if (!googleStatus) return;
+
+    if (googleStatus === "connected") {
+      setGoogleOauthReturn("connected");
       setGoogleRefreshKey((value) => value + 1);
-      if (activePage !== "personal") {
-        setActivePage("personal");
-      }
-      params.delete("google_calendar");
-      params.delete("message");
-      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
-      window.history.replaceState({}, "", next);
+    } else if (googleStatus === "error") {
+      const message =
+        params.get("message")?.replace(/\+/g, " ") ||
+        "Google sign-in failed. Try again.";
+      setGoogleOauthReturn("error");
+      setGoogleOauthError(decodeURIComponent(message));
     }
-  }, [activePage]);
+
+    setActivePage("personal");
+
+    params.delete("google_calendar");
+    params.delete("message");
+    const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
+    window.history.replaceState({}, "", next);
+  }, []);
 
   const handleNewChat = () => {
     void (async () => {
@@ -111,7 +122,11 @@ export function ConversationPage() {
 
           {activePage === "personal" && (
             <div className="pt-4">
-              <GoogleCalendarPanel refreshKey={googleRefreshKey} />
+              <GoogleCalendarPanel
+                refreshKey={googleRefreshKey}
+                oauthReturn={googleOauthReturn}
+                oauthErrorMessage={googleOauthError}
+              />
             </div>
           )}
 

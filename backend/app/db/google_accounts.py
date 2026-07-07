@@ -153,10 +153,13 @@ async def save_account(
 
     if existing.data:
         # Update existing account
-        account_id = existing.data[0]["id"]
+        existing_row = existing.data[0]
+        account_id = existing_row["id"]
+        # Preserve primary status when refreshing tokens for an existing account.
+        resolved_is_primary = is_primary or existing_row.get("is_primary", False)
 
         # If setting as primary, unset other primaries
-        if is_primary:
+        if resolved_is_primary:
             supabase.table("google_accounts").update({"is_primary": False}).eq(
                 "is_primary", True
             ).execute()
@@ -168,7 +171,7 @@ async def save_account(
                     "tokens": tokens,
                     "granted_scopes": scopes,
                     "account_label": account_label,
-                    "is_primary": is_primary,
+                    "is_primary": resolved_is_primary,
                 }
             )
             .eq("id", account_id)

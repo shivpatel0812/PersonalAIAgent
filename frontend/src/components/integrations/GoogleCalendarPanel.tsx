@@ -11,9 +11,15 @@ import {
 
 type GoogleCalendarPanelProps = {
   refreshKey?: number;
+  oauthReturn?: "connected" | "error" | null;
+  oauthErrorMessage?: string | null;
 };
 
-export function GoogleCalendarPanel({ refreshKey = 0 }: GoogleCalendarPanelProps) {
+export function GoogleCalendarPanel({
+  refreshKey = 0,
+  oauthReturn = null,
+  oauthErrorMessage = null,
+}: GoogleCalendarPanelProps) {
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [availableServices, setAvailableServices] = useState<ServiceInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,25 +45,21 @@ export function GoogleCalendarPanel({ refreshKey = 0 }: GoogleCalendarPanelProps
   }
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const oauthResult = params.get("google_calendar");
-
-    if (oauthResult === "error") {
-      const message =
-        params.get("message")?.replace(/\+/g, " ") ||
-        "Google sign-in failed. Try again.";
-      setError(decodeURIComponent(message));
+    if (oauthReturn === "error") {
+      setError(oauthErrorMessage || "Google sign-in failed. Try again.");
       setLoading(false);
-      window.history.replaceState({}, "", window.location.pathname);
       return;
     }
 
-    loadData().then(() => {
-      if (oauthResult === "connected") {
-        window.history.replaceState({}, "", window.location.pathname);
-      }
-    });
-  }, [refreshKey]);
+    loadData();
+  }, [refreshKey, oauthReturn, oauthErrorMessage]);
+
+  function handleConnectNewAccount(selectAccount = false) {
+    const base = `${import.meta.env.VITE_API_URL}/auth/google/connect`;
+    const url = selectAccount ? `${base}?select_account=true` : base;
+    sessionStorage.setItem("google_oauth_pending", "1");
+    window.location.href = url;
+  }
 
   async function handleDeleteAccount(accountId: string) {
     if (!confirm("Are you sure you want to disconnect this account?")) return;
@@ -97,11 +99,6 @@ export function GoogleCalendarPanel({ refreshKey = 0 }: GoogleCalendarPanelProps
   function getServiceLabel(serviceName: string): string {
     const service = availableServices.find(s => s.name === serviceName);
     return service?.label || serviceName;
-  }
-
-  function handleConnectNewAccount() {
-    // Navigate to OAuth flow
-    window.location.href = `${import.meta.env.VITE_API_URL}/auth/google/connect`;
   }
 
   if (loading) {
@@ -259,7 +256,7 @@ export function GoogleCalendarPanel({ refreshKey = 0 }: GoogleCalendarPanelProps
           {/* Add Another Account */}
           <button
             type="button"
-            onClick={handleConnectNewAccount}
+            onClick={() => handleConnectNewAccount(true)}
             className="w-full rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-3 py-2.5 text-sm text-slate-400 transition hover:border-accent hover:text-accent"
           >
             + Add Another Account

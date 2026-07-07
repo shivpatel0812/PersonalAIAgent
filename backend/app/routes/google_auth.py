@@ -160,13 +160,17 @@ def google_calendar_status() -> GoogleCalendarStatus:
 
 
 @router.get("/connect")
-def google_calendar_connect(services: list[str] = Query(default=[])):
+def google_calendar_connect(
+    services: list[str] = Query(default=[]),
+    select_account: bool = Query(default=False),
+):
     """
     Initiate OAuth flow with selected services.
 
     Args:
         services: List of service names to request access for (e.g., ["gmail", "calendar"])
                  If empty, requests all services.
+        select_account: When true, show Google's account picker (use when adding another account).
     """
     if not settings.google_oauth_configured:
         raise HTTPException(
@@ -181,7 +185,9 @@ def google_calendar_connect(services: list[str] = Query(default=[])):
         if not scopes:
             raise HTTPException(status_code=400, detail="No valid services selected")
 
-    return RedirectResponse(url=get_authorization_url(scopes=scopes))
+    return RedirectResponse(
+        url=get_authorization_url(scopes=scopes, select_account=select_account)
+    )
 
 
 @router.get("/callback")

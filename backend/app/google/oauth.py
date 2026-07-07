@@ -201,18 +201,24 @@ def _get_user_email(credentials: Credentials) -> str:
     )
 
 
-def get_authorization_url(scopes: list[str] | None = None) -> str:
+def get_authorization_url(
+    scopes: list[str] | None = None,
+    *,
+    select_account: bool = False,
+) -> str:
     """
     Get OAuth authorization URL with custom scopes.
 
     Args:
         scopes: List of scope URLs to request. If None, requests all scopes.
+        select_account: When True, force Google to show the account picker.
     """
     flow = create_oauth_flow(scopes=scopes)
+    prompt = "select_account consent" if select_account else "consent"
     authorization_url, _state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent",
+        prompt=prompt,
     )
     return authorization_url
 
