@@ -10,7 +10,10 @@ import { MemoryPanel } from "../components/research/MemoryPanel";
 import { ErrorBanner } from "../components/research/ErrorBanner";
 import { TweaksPanel } from "../components/tweaks/TweaksPanel";
 import { GoogleCalendarPanel } from "../components/integrations/GoogleCalendarPanel";
+import { EmailAgentPanel } from "../components/email-agent/EmailAgentPanel";
 import { RESEARCH_PAGES, getPageConfig, type PageType } from "../types/conversation";
+
+type PersonalView = "chat" | "email-agent";
 
 export function ConversationPage() {
   const { maxSearches } = useResearchSettings();
@@ -43,6 +46,7 @@ export function ConversationPage() {
   } = useConversation(activePage, activeThreadId);
 
   const [input, setInput] = useState("");
+  const [personalView, setPersonalView] = useState<PersonalView>("chat");
   const isLoading = status === "loading";
   const displayError = error ?? threadsError;
 
@@ -121,42 +125,73 @@ export function ConversationPage() {
           )}
 
           {activePage === "personal" && (
-            <div className="pt-4">
+            <div className="space-y-4 pt-4">
               <GoogleCalendarPanel
                 refreshKey={googleRefreshKey}
                 oauthReturn={googleOauthReturn}
                 oauthErrorMessage={googleOauthError}
               />
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPersonalView("chat")}
+                  className={`rounded-lg px-3 py-1.5 text-sm transition ${
+                    personalView === "chat"
+                      ? "bg-slate-800 text-slate-100"
+                      : "text-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  Chat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPersonalView("email-agent")}
+                  className={`rounded-lg px-3 py-1.5 text-sm transition ${
+                    personalView === "email-agent"
+                      ? "bg-slate-800 text-slate-100"
+                      : "text-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  Email Agent
+                </button>
+              </div>
+
+              {personalView === "email-agent" && <EmailAgentPanel />}
             </div>
           )}
 
-          {memoryRuns.length > 0 && isLoading && (
-            <div className="pt-4">
-              <MemoryPanel runs={memoryRuns} />
-            </div>
+          {!(activePage === "personal" && personalView === "email-agent") && (
+            <>
+              {memoryRuns.length > 0 && isLoading && (
+                <div className="pt-4">
+                  <MemoryPanel runs={memoryRuns} />
+                </div>
+              )}
+
+              <ConversationThread
+                messages={messages}
+                loadingConversation={loadingConversation || loadingThreads}
+                isResearching={isLoading}
+                pendingQuestion={pendingQuestion}
+                streamingSteps={streamingSteps}
+                memoryRunsCount={memoryRuns.length}
+              />
+
+              <ConversationInput
+                value={input}
+                placeholder={
+                  messages.length > 0
+                    ? "Ask a follow-up…"
+                    : pageConfig.placeholder
+                }
+                loading={isLoading}
+                disabled={!activeThreadId}
+                onChange={setInput}
+                onSubmit={handleSubmit}
+              />
+            </>
           )}
-
-          <ConversationThread
-            messages={messages}
-            loadingConversation={loadingConversation || loadingThreads}
-            isResearching={isLoading}
-            pendingQuestion={pendingQuestion}
-            streamingSteps={streamingSteps}
-            memoryRunsCount={memoryRuns.length}
-          />
-
-          <ConversationInput
-            value={input}
-            placeholder={
-              messages.length > 0
-                ? "Ask a follow-up…"
-                : pageConfig.placeholder
-            }
-            loading={isLoading}
-            disabled={!activeThreadId}
-            onChange={setInput}
-            onSubmit={handleSubmit}
-          />
         </div>
       </div>
 
