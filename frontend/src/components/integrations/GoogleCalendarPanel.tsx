@@ -26,10 +26,9 @@ export function GoogleCalendarPanel({ refreshKey = 0 }: GoogleCalendarPanelProps
     setLoading(true);
     setError(null);
     try {
-      const [accountsData, servicesData, statusData] = await Promise.all([
+      const [accountsData, servicesData] = await Promise.all([
         fetchAccounts(),
         fetchAvailableServices(),
-        fetchGoogleCalendarStatus(),
       ]);
       setAccounts(accountsData.accounts);
       setAvailableServices(servicesData.services);
