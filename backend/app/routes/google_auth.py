@@ -192,11 +192,15 @@ def google_calendar_callback(code: str | None = None, error: str | None = None):
         raise HTTPException(status_code=400, detail="Missing OAuth code")
 
     try:
-        # Exchange code for credentials (scopes are stored in the token)
-        exchange_code_for_credentials(code)
+        # Exchange code for credentials and save account
+        credentials, account_id = exchange_code_for_credentials(code)
+        print(f"Successfully connected account: {account_id}")
     except Exception as exc:
+        print(f"Error in OAuth callback: {exc}")
+        import traceback
+        traceback.print_exc()
         return RedirectResponse(
-            url=f"{settings.frontend_url}?google_calendar=error&message={exc}"
+            url=f"{settings.frontend_url}?google_calendar=error&message={str(exc)}"
         )
 
     return RedirectResponse(url=f"{settings.frontend_url}?google_calendar=connected")
