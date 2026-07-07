@@ -2,9 +2,9 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 
+from app.agents.email_recap import settings as recap_settings
 from app.agents.email_recap.job import run_email_recap
 from app.agents.scheduler import scheduler_running
-from app.config import settings
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -13,13 +13,13 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 def email_recap_status() -> dict:
     """Check whether the email recap agent is enabled and scheduled."""
     return {
-        "enabled": settings.email_recap_enabled,
+        "enabled": recap_settings.ENABLED,
         "scheduler_running": scheduler_running(),
-        "timezone": settings.email_recap_timezone,
-        "morning": f"{settings.email_recap_morning_hour:02d}:{settings.email_recap_morning_minute:02d}",
-        "evening": f"{settings.email_recap_evening_hour:02d}:{settings.email_recap_evening_minute:02d}",
-        "max_emails_per_account": settings.email_recap_max_emails_per_account,
-        "recipient_override": settings.email_recap_recipient or None,
+        "timezone": recap_settings.TIMEZONE,
+        "morning": f"{recap_settings.MORNING_HOUR:02d}:{recap_settings.MORNING_MINUTE:02d}",
+        "evening": f"{recap_settings.EVENING_HOUR:02d}:{recap_settings.EVENING_MINUTE:02d}",
+        "max_emails_per_account": recap_settings.MAX_EMAILS_PER_ACCOUNT,
+        "recipient_override": recap_settings.RECIPIENT_OVERRIDE or None,
     }
 
 
@@ -28,7 +28,7 @@ async def trigger_email_recap(
     slot: Literal["morning", "evening"] = "morning",
 ) -> dict:
     """Manually run the email recap agent (useful for testing)."""
-    if not settings.email_recap_enabled:
+    if not recap_settings.ENABLED:
         raise HTTPException(status_code=503, detail="Email recap agent is disabled")
 
     result = await run_email_recap(slot=slot)

@@ -8,8 +8,8 @@ import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from app.agents.email_recap import settings as recap_settings
 from app.agents.email_recap.job import run_email_recap
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,21 +20,21 @@ def start_scheduler() -> None:
     """Start background scheduler for agent jobs."""
     global _scheduler
 
-    if not settings.email_recap_enabled:
+    if not recap_settings.ENABLED:
         logger.info("Email recap scheduler disabled")
         return
 
     if _scheduler is not None:
         return
 
-    tz = pytz.timezone(settings.email_recap_timezone)
+    tz = pytz.timezone(recap_settings.TIMEZONE)
     _scheduler = AsyncIOScheduler(timezone=tz)
 
     _scheduler.add_job(
         run_email_recap,
         CronTrigger(
-            hour=settings.email_recap_morning_hour,
-            minute=settings.email_recap_morning_minute,
+            hour=recap_settings.MORNING_HOUR,
+            minute=recap_settings.MORNING_MINUTE,
             timezone=tz,
         ),
         kwargs={"slot": "morning"},
@@ -47,8 +47,8 @@ def start_scheduler() -> None:
     _scheduler.add_job(
         run_email_recap,
         CronTrigger(
-            hour=settings.email_recap_evening_hour,
-            minute=settings.email_recap_evening_minute,
+            hour=recap_settings.EVENING_HOUR,
+            minute=recap_settings.EVENING_MINUTE,
             timezone=tz,
         ),
         kwargs={"slot": "evening"},
@@ -61,11 +61,11 @@ def start_scheduler() -> None:
     _scheduler.start()
     logger.info(
         "Agent scheduler started — email recap at %02d:%02d and %02d:%02d %s",
-        settings.email_recap_morning_hour,
-        settings.email_recap_morning_minute,
-        settings.email_recap_evening_hour,
-        settings.email_recap_evening_minute,
-        settings.email_recap_timezone,
+        recap_settings.MORNING_HOUR,
+        recap_settings.MORNING_MINUTE,
+        recap_settings.EVENING_HOUR,
+        recap_settings.EVENING_MINUTE,
+        recap_settings.TIMEZONE,
     )
 
 

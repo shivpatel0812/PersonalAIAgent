@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.ai.config import settings as ai_settings
+from app.agents.email_recap import settings as recap_settings
 from app.agents.scheduler import shutdown_scheduler, scheduler_running, start_scheduler
 from app.routes.ai import router as ai_router
 from app.routes.agents import router as agents_router
@@ -69,7 +70,7 @@ def health() -> dict[str, str | bool]:
         "gmail_working": gmail_ok,
         "google_drive_connected": has_stored_credentials(),
         "google_drive_working": drive_ok,
-        "email_recap_enabled": settings.email_recap_enabled,
+        "email_recap_enabled": recap_settings.ENABLED,
         "email_recap_scheduler_running": scheduler_running(),
     }
 

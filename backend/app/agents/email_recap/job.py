@@ -8,10 +8,10 @@ from typing import Literal
 
 import pytz
 
+from app.agents.email_recap import settings as recap_settings
 from app.agents.email_recap.gmail import list_recap_candidates, send_recap_email
 from app.agents.email_recap.summarizer import summarize_email_recap
 from app.ai.config import settings as ai_settings
-from app.config import settings
 from app.db.google_accounts import get_primary_account, list_accounts
 from app.google.oauth import load_credentials
 
@@ -32,7 +32,7 @@ async def run_email_recap(slot: RecapSlot = "morning") -> dict:
     Args:
         slot: "morning" (7am) or "evening" (5pm) — affects lookback window and subject line.
     """
-    if not settings.email_recap_enabled:
+    if not recap_settings.ENABLED:
         return {"status": "skipped", "reason": "email recap disabled"}
 
     if not ai_settings.openai_configured:
@@ -64,7 +64,7 @@ async def run_email_recap(slot: RecapSlot = "morning") -> dict:
                 credentials,
                 account_email=account.email,
                 hours=hours,
-                max_results=settings.email_recap_max_emails_per_account,
+                max_results=recap_settings.MAX_EMAILS_PER_ACCOUNT,
             )
             all_emails.extend(emails)
             logger.info("Fetched %s emails for %s", len(emails), account.email)
@@ -78,12 +78,12 @@ async def run_email_recap(slot: RecapSlot = "morning") -> dict:
         account_emails=account_emails,
     )
 
-    tz = pytz.timezone(settings.email_recap_timezone)
+    tz = pytz.timezone(recap_settings.TIMEZONE)
     now = datetime.now(tz)
     slot_label = "Morning" if slot == "morning" else "Evening"
     subject = f"{slot_label} Email Recap — {now.strftime('%a %b %d')}"
 
-    recipient = settings.email_recap_recipient or primary.email
+    recipient = recap_settings.RECIPIENT_OVERRIDE or primary.email
 
     try:
         sent = send_recap_email(
