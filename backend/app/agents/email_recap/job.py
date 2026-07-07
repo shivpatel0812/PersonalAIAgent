@@ -9,8 +9,8 @@ from typing import Literal
 import pytz
 
 from app.agents.email_recap import settings as recap_settings
-from app.agents.email_recap.gmail import list_recap_candidates, send_recap_email
-from app.agents.email_recap.summarizer import summarize_email_recap
+from app.agents.email_recap.gmail import list_recap_candidates, send_html_recap_email
+from app.agents.email_recap.intelligent_summarizer import generate_intelligent_recap_html
 from app.ai.config import settings as ai_settings
 from app.db.google_accounts import get_primary_account, list_accounts
 from app.google.oauth import load_credentials
@@ -81,7 +81,9 @@ async def run_email_recap(slot: RecapSlot = "morning") -> dict:
             logger.exception("Failed to fetch emails for %s: %s", account.email, exc)
 
     account_emails = [a.email for a in accounts]
-    recap_body = summarize_email_recap(
+
+    # Generate intelligent HTML recap
+    recap_html = generate_intelligent_recap_html(
         slot=slot,
         emails=all_emails,
         account_emails=account_emails,
@@ -95,11 +97,12 @@ async def run_email_recap(slot: RecapSlot = "morning") -> dict:
     recipient = recap_settings.RECIPIENT_OVERRIDE or primary.email
 
     try:
-        sent = send_recap_email(
+        sent = send_html_recap_email(
             primary_credentials,
             to=recipient,
             subject=subject,
-            body=recap_body,
+            html_body=recap_html,
+            text_body="Please view this email in an HTML-capable email client.",
         )
         logger.info("Sent %s recap to %s (message id %s)", slot, recipient, sent.get("id"))
         return {

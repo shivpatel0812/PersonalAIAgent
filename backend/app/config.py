@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8001/auth/google/callback"
     frontend_url: str = "http://localhost:5174"
+    backend_url: str = "http://localhost:8001"
 
     @property
     def supabase_configured(self) -> bool:

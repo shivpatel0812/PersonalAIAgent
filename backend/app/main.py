@@ -11,6 +11,7 @@ from app.google.email_safety import OUTBOUND_EMAIL_ENABLED
 from app.routes.ai import router as ai_router
 from app.routes.agents import router as agents_router
 from app.routes.google_auth import router as google_auth_router
+from app.routes.email_intelligence import router as email_intelligence_router
 from app.supabase_client import get_supabase_client
 from app.google.oauth import has_stored_credentials, test_calendar_access
 
@@ -35,6 +36,7 @@ app.add_middleware(
 app.include_router(ai_router)
 app.include_router(google_auth_router)
 app.include_router(agents_router)
+app.include_router(email_intelligence_router)
 
 
 @app.get("/health")

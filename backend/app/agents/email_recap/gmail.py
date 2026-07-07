@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import re
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
 
@@ -16,8 +18,10 @@ from app.google.email_safety import validate_outbound_email
 class RecapEmail(BaseModel):
     account_email: str
     id: str
+    message_id: str  # Gmail message ID
     subject: str
     from_email: str
+    from_name: str | None = None  # Extracted sender name
     date: str
     snippet: str
     is_unread: bool
@@ -56,12 +60,28 @@ def list_recap_candidates(
         headers = {h["name"]: h["value"] for h in message["payload"]["headers"]}
         labels = message.get("labelIds", [])
 
+        # Extract sender name from "Name <email@domain.com>" format
+        from_header = headers.get("From", "Unknown")
+        from_name = None
+        from_email = from_header
+
+        # Try to parse "Name <email>" format
+        match = re.match(r'^"?([^"<]+)"?\s*<(.+)>$', from_header)
+        if match:
+            from_name = match.group(1).strip()
+            from_email = match.group(2).strip()
+        else:
+            # Just an email address
+            from_email = from_header.strip()
+
         emails.append(
             RecapEmail(
                 account_email=account_email,
                 id=message["id"],
+                message_id=message["id"],
                 subject=headers.get("Subject", "(No subject)"),
-                from_email=headers.get("From", "Unknown"),
+                from_email=from_email,
+                from_name=from_name,
                 date=headers.get("Date", ""),
                 snippet=message.get("snippet", ""),
                 is_unread="UNREAD" in labels,
@@ -89,6 +109,44 @@ def send_recap_email(
     message = MIMEText(body)
     message["to"] = to
     message["subject"] = subject
+
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+    sent = service.users().messages().send(
+        userId="me",
+        body={"raw": raw_message},
+    ).execute()
+
+    return sent
+
+
+def send_html_recap_email(
+    credentials: Credentials,
+    *,
+    to: str,
+    subject: str,
+    html_body: str,
+    text_body: str | None = None,
+) -> dict[str, Any]:
+    """Send an HTML recap email via Gmail with plain text fallback."""
+    allowed, error = validate_outbound_email(to=to)
+    if not allowed:
+        raise ValueError(error)
+
+    service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+
+    # Create multipart message
+    message = MIMEMultipart("alternative")
+    message["to"] = to
+    message["subject"] = subject
+
+    # Plain text fallback
+    if text_body:
+        part1 = MIMEText(text_body, "plain")
+        message.attach(part1)
+
+    # HTML content
+    part2 = MIMEText(html_body, "html")
+    message.attach(part2)
 
     raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     sent = service.users().messages().send(
