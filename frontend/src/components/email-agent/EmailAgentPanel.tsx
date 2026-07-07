@@ -6,9 +6,10 @@ import {
   discardEmailItem,
   fetchEmailAgentItem,
   fetchEmailAgentItems,
+  fetchEmailAgentThread,
   scanEmailAgentInbox,
 } from "../../lib/api/emailAgent";
-import type { DraftChatMessage, EmailAgentItem } from "../../types/emailAgent";
+import type { DraftChatMessage, EmailAgentItem, EmailThreadDetail } from "../../types/emailAgent";
 
 const STATUS_LABELS = {
   needs_draft: "Drafting…",
@@ -39,6 +40,9 @@ export function EmailAgentPanel({
   const [scanning, setScanning] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedIncoming, setExpandedIncoming] = useState<Record<string, boolean>>({});
+  const [threadByItem, setThreadByItem] = useState<Record<string, EmailThreadDetail>>({});
+  const [loadingThreadFor, setLoadingThreadFor] = useState<string | null>(null);
 
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) ?? items[0],
@@ -87,6 +91,30 @@ export function EmailAgentPanel({
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load email");
       }
+    }
+  }
+
+  async function toggleIncomingEmail(itemId: string) {
+    const isExpanded = expandedIncoming[itemId];
+    if (isExpanded) {
+      setExpandedIncoming((prev) => ({ ...prev, [itemId]: false }));
+      return;
+    }
+
+    setExpandedIncoming((prev) => ({ ...prev, [itemId]: true }));
+
+    if (threadByItem[itemId]) return;
+
+    setLoadingThreadFor(itemId);
+    setError(null);
+    try {
+      const thread = await fetchEmailAgentThread(itemId);
+      setThreadByItem((prev) => ({ ...prev, [itemId]: thread }));
+    } catch (err) {
+      setExpandedIncoming((prev) => ({ ...prev, [itemId]: false }));
+      setError(err instanceof Error ? err.message : "Failed to load full email");
+    } finally {
+      setLoadingThreadFor(null);
     }
   }
 
@@ -273,7 +301,65 @@ export function EmailAgentPanel({
                   </div>
 
                   <p className="text-sm font-semibold text-slate-200">{selected.subject}</p>
-                  <p className="mt-3 text-sm leading-7 text-slate-400">{selected.summary}</p>
+
+                  <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                    <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
+                      Incoming email
+                    </p>
+                    <p
+                      className={`mt-2 text-sm leading-7 text-slate-400 ${
+                        expandedIncoming[selected.id] ? "" : "line-clamp-3"
+                      }`}
+                    >
+                      {selected.summary || "No summary available."}
+                    </p>
+
+                    {expandedIncoming[selected.id] && (
+                      <div className="mt-4 space-y-3 border-t border-slate-800 pt-4">
+                        {loadingThreadFor === selected.id && (
+                          <p className="text-sm text-slate-500">Loading full thread…</p>
+                        )}
+                        {threadByItem[selected.id]?.messages.map((message) => (
+                          <div
+                            key={message.id}
+                            className={`rounded-lg border px-3 py-3 ${
+                              message.isTarget
+                                ? "border-accent/30 bg-accent/5"
+                                : "border-slate-800 bg-slate-900/50"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-xs font-medium text-slate-300">
+                                {message.fromEmail}
+                              </p>
+                              <p className="text-[10px] text-slate-600">{message.date}</p>
+                            </div>
+                            {message.isTarget && (
+                              <p className="mt-1 text-[10px] font-medium uppercase tracking-wider text-accent/80">
+                                Replying to this message
+                              </p>
+                            )}
+                            <pre className="mt-2 whitespace-pre-wrap font-sans text-sm leading-6 text-slate-300">
+                              {message.body}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => void toggleIncomingEmail(selected.id)}
+                      disabled={loadingThreadFor === selected.id}
+                      className="mt-3 text-xs text-accent transition hover:text-accent/80 disabled:opacity-50"
+                    >
+                      {loadingThreadFor === selected.id
+                        ? "Loading…"
+                        : expandedIncoming[selected.id]
+                          ? "Show summary only"
+                          : "Show full email"}
+                    </button>
+                  </div>
 
                   <p className="mb-2 mt-8 text-[11px] font-medium uppercase tracking-wider text-slate-500">
                     Draft response

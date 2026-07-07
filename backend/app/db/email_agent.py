@@ -70,6 +70,22 @@ def _row_to_item(row: dict[str, Any]) -> EmailAgentItem:
     return EmailAgentItem(row)
 
 
+async def list_items_by_status(
+    status: EmailAgentStatus,
+    user_id: str = "default",
+) -> list[EmailAgentItem]:
+    supabase = get_supabase_client()
+    result = (
+        supabase.table("email_agent_items")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("status", status)
+        .order("created_at")
+        .execute()
+    )
+    return [_row_to_item(row) for row in result.data]
+
+
 async def list_active_items(user_id: str = "default") -> list[EmailAgentItem]:
     supabase = get_supabase_client()
     result = (

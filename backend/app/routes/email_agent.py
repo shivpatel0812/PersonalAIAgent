@@ -7,6 +7,7 @@ from app.agents.email_agent.service import (
     approve_and_send_item,
     discard_item,
     get_item_detail,
+    get_item_thread,
     list_items,
     scan_for_reply_candidates,
 )
@@ -46,6 +47,16 @@ async def get_email_agent_item(item_id: str) -> dict:
         return await get_item_detail(item_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/items/{item_id}/thread")
+async def get_email_agent_thread(item_id: str) -> dict:
+    try:
+        return await get_item_thread(item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/items/{item_id}/adjust")

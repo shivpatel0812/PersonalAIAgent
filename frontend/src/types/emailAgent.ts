@@ -16,3 +16,20 @@ export type DraftChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
+
+export type EmailThreadMessage = {
+  id: string;
+  fromEmail: string;
+  toEmail: string | null;
+  date: string;
+  subject: string;
+  body: string;
+  isInbound: boolean;
+  isTarget: boolean;
+};
+
+export type EmailThreadDetail = {
+  threadId: string;
+  subject: string;
+  messages: EmailThreadMessage[];
+};

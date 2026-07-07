@@ -11,6 +11,7 @@ export {
 export {
   fetchEmailAgentItems,
   fetchEmailAgentItem,
+  fetchEmailAgentThread,
   scanEmailAgentInbox,
   adjustEmailDraft,
   approveEmailDraft,

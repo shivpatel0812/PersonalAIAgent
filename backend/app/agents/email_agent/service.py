@@ -12,6 +12,7 @@ from app.agents.email_agent.detector import (
     build_thread_excerpt,
     email_needs_reply,
     get_message_thread_id,
+    is_likely_automated,
     latest_inbound_message_id,
     list_reply_candidates,
 )
@@ -29,6 +30,7 @@ from app.db.email_agent import (
     get_item_by_message_id,
     list_active_items,
     list_chat_messages,
+    list_items_by_status,
     update_item,
 )
 from app.db.google_accounts import list_accounts
@@ -42,6 +44,51 @@ def _reply_subject(subject: str) -> str:
     if subject.lower().startswith("re:"):
         return subject
     return f"Re: {subject}"
+
+
+async def _discard_failed_item(item_id: str, reason: str) -> None:
+    logger.warning("Discarding email agent item %s: %s", item_id, reason)
+    await update_item(item_id, status="discarded")
+
+
+async def recover_stuck_drafts() -> dict:
+    """Retry or remove queue items stuck in needs_draft."""
+    stuck = await list_items_by_status("needs_draft")
+    retried = 0
+    recovered = 0
+    discarded = 0
+
+    for item in stuck:
+        retried += 1
+        try:
+            await draft_item(item.id)
+            recovered += 1
+        except Exception as exc:
+            logger.exception("Retry draft failed for %s: %s", item.id, exc)
+            await _discard_failed_item(item.id, str(exc))
+            discarded += 1
+
+    return {
+        "stuck_found": len(stuck),
+        "retried": retried,
+        "recovered": recovered,
+        "discarded": discarded,
+    }
+
+
+async def cleanup_bad_queue_items() -> dict:
+    """Discard active items that are clearly automated notifications."""
+    removed = 0
+    for item in await list_active_items():
+        should_skip, reason = is_likely_automated(
+            from_email=item.sender_email,
+            subject=item.subject or "",
+            snippet=item.summary or "",
+        )
+        if should_skip:
+            await _discard_failed_item(item.id, reason)
+            removed += 1
+    return {"removed": removed}
 
 
 async def scan_for_reply_candidates() -> dict:
@@ -64,9 +111,13 @@ async def scan_for_reply_candidates() -> dict:
             "active_count": active_count,
         }
 
+    cleanup_result = await cleanup_bad_queue_items()
+    recovery_result = await recover_stuck_drafts()
+
     scanned = 0
     queued = 0
     drafted = 0
+    skipped_automated = 0
 
     for account in accounts:
         credentials = load_credentials(account.id)
@@ -85,6 +136,20 @@ async def scan_for_reply_candidates() -> dict:
             scanned += 1
 
             if await get_item_by_message_id(candidate.message_id):
+                continue
+
+            should_skip, skip_reason = is_likely_automated(
+                from_email=candidate.from_email,
+                subject=candidate.subject,
+                snippet=candidate.snippet,
+            )
+            if should_skip:
+                skipped_automated += 1
+                logger.info(
+                    "Skipping automated email %s: %s",
+                    candidate.message_id,
+                    skip_reason,
+                )
                 continue
 
             thread_id = get_message_thread_id(credentials, candidate.message_id)
@@ -123,12 +188,16 @@ async def scan_for_reply_candidates() -> dict:
                 drafted += 1
             except Exception as exc:
                 logger.exception("Failed to draft item %s: %s", item.id, exc)
+                await _discard_failed_item(item.id, str(exc))
 
     return {
         "status": "ok",
         "scanned": scanned,
         "queued": queued,
         "drafted": drafted,
+        "skipped_automated": skipped_automated,
+        "cleanup": cleanup_result,
+        "recovery": recovery_result,
     }
 
 
@@ -298,6 +367,48 @@ async def discard_item(item_id: str) -> EmailAgentItem:
     return updated
 
 
+async def get_item_thread(item_id: str) -> dict:
+    """Load the full Gmail thread for a queue item."""
+    item = await get_item(item_id)
+    if not item:
+        raise ValueError("Item not found")
+
+    credentials = load_credentials(item.google_account_id)
+    if not credentials:
+        raise ValueError("Could not load Gmail credentials")
+
+    from app.db.google_accounts import get_account
+
+    account = await get_account(item.google_account_id)
+    account_email = (account.email if account else "").lower()
+
+    service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+    conversation = _fetch_thread_conversation(service, item.gmail_thread_id)
+
+    messages = []
+    for message in conversation.messages:
+        from_lower = message.from_email.lower()
+        is_inbound = account_email not in from_lower
+        messages.append(
+            {
+                "id": message.email_id,
+                "fromEmail": message.from_email,
+                "toEmail": message.to_email,
+                "date": message.date,
+                "subject": message.subject,
+                "body": message.body,
+                "isInbound": is_inbound,
+                "isTarget": message.email_id == item.gmail_message_id,
+            }
+        )
+
+    return {
+        "threadId": conversation.thread_id,
+        "subject": conversation.subject,
+        "messages": messages,
+    }
+
+
 async def get_item_detail(item_id: str) -> dict:
     item = await get_item(item_id)
     if not item:
@@ -311,5 +422,6 @@ async def get_item_detail(item_id: str) -> dict:
 
 
 async def list_items() -> list[dict]:
+    await cleanup_bad_queue_items()
     items = await list_active_items()
     return [item.to_api_dict() for item in items]

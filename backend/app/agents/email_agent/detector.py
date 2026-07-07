@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 
@@ -10,6 +9,8 @@ from googleapiclient.discovery import build
 
 from app.agents.email_agent import settings as agent_settings
 from app.agents.email_recap.gmail import RecapEmail
+from app.agents.email_agent.filters import is_likely_automated
+from app.agents.email_agent.json_utils import parse_json_response
 from app.ai.openai_client import chat_messages
 from app.ai.tools.gmail_tool import _fetch_thread_conversation
 from app.google.oauth import load_credentials
@@ -56,6 +57,13 @@ def list_reply_candidates(
         from_header = headers.get("From", "Unknown")
         from_name, from_email = _parse_sender(from_header)
 
+        if is_likely_automated(
+            from_email=from_email,
+            subject=headers.get("Subject", "(No subject)"),
+            snippet=message.get("snippet", ""),
+        )[0]:
+            continue
+
         emails.append(
             RecapEmail(
                 account_email=account_email,
@@ -85,15 +93,18 @@ def email_needs_reply(
     """Use AI to decide if this email needs a human-written reply."""
     system_prompt = """You decide whether an email needs a reply from the user.
 
-Reply YES when:
-- Someone asked a question or requested action
-- A meeting, deadline, or decision is involved
+Reply YES only when:
+- A real person asked a question or requested action from the user
+- A meeting, deadline, or decision clearly needs the user's response
 - A personal or professional follow-up is expected
 
-Reply NO when:
-- Newsletter, marketing, automated notification, receipt, or FYI-only
-- The user already sent the last message in the thread
-- No response is realistically expected
+Reply NO for:
+- Login alerts, security notices, verification codes, password resets
+- GitHub/Vercel/deployment/CI notifications, receipts, shipping updates
+- Newsletters, marketing, digests, automated system mail, FYI-only messages
+- Anything where replying would go to a no-reply address or is not expected
+
+When unsure, reply NO.
 
 Return ONLY valid JSON:
 {"needs_reply": true, "summary": "1-2 sentence summary of what they want"}
@@ -120,7 +131,7 @@ or
             ],
             max_tokens=400,
         )
-        result = json.loads(response)
+        result = parse_json_response(response)
         return bool(result.get("needs_reply")), str(result.get("summary", "")).strip()
     except Exception as exc:
         logger.warning("needs_reply classification failed: %s", exc)

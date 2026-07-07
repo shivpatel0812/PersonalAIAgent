@@ -1,4 +1,4 @@
-import type { DraftChatMessage, EmailAgentItem } from "../../types/emailAgent";
+import type { DraftChatMessage, EmailAgentItem, EmailThreadDetail } from "../../types/emailAgent";
 import { apiUrl } from "./client";
 
 export type EmailAgentItemDetail = {
@@ -32,6 +32,14 @@ export async function fetchEmailAgentItem(itemId: string): Promise<EmailAgentIte
   const response = await fetch(`${apiUrl}/email-agent/items/${itemId}`);
   if (!response.ok) {
     await parseError(response, "Failed to load email");
+  }
+  return response.json();
+}
+
+export async function fetchEmailAgentThread(itemId: string): Promise<EmailThreadDetail> {
+  const response = await fetch(`${apiUrl}/email-agent/items/${itemId}/thread`);
+  if (!response.ok) {
+    await parseError(response, "Failed to load full email");
   }
   return response.json();
 }

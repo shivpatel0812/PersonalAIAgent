@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
+from app.agents.email_agent.json_utils import parse_json_response
 from app.ai.openai_client import chat_messages
 from app.ai.tools.gmail_tool import EmailThreadConversation
 
@@ -56,8 +56,12 @@ Rules:
         ],
         max_tokens=1200,
     )
-    result = json.loads(response)
-    return str(result.get("summary", "")).strip(), str(result.get("draft", "")).strip()
+    result = parse_json_response(response)
+    summary = str(result.get("summary", "")).strip()
+    draft = str(result.get("draft", "")).strip()
+    if not draft:
+        raise ValueError("Model returned an empty draft")
+    return summary, draft
 
 
 def revise_draft(
@@ -98,9 +102,12 @@ Return ONLY valid JSON:
         ],
         max_tokens=1200,
     )
-    result = json.loads(response)
+    result = parse_json_response(response)
+    revised = str(result.get("draft", current_draft)).strip()
+    if not revised:
+        raise ValueError("Model returned an empty draft")
     return (
-        str(result.get("draft", current_draft)).strip(),
+        revised,
         str(
             result.get(
                 "assistant_message",
