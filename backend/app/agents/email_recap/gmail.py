@@ -10,6 +10,8 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from pydantic import BaseModel
 
+from app.google.email_safety import validate_outbound_email
+
 
 class RecapEmail(BaseModel):
     account_email: str
@@ -78,6 +80,10 @@ def send_recap_email(
     body: str,
 ) -> dict[str, Any]:
     """Send a plain-text recap email via Gmail."""
+    allowed, error = validate_outbound_email(to=to)
+    if not allowed:
+        raise ValueError(error)
+
     service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
     message = MIMEText(body)

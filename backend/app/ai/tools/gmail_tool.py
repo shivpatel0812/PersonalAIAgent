@@ -8,8 +8,16 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from app.ai.tools.base import Tool, ToolParameter
+from app.google.email_safety import validate_outbound_email
 from app.google.oauth import load_credentials
 from googleapiclient.discovery import build
+
+
+def _gmail_query_since_hours(hours: int) -> str:
+    """Build a Gmail search query for messages since N hours ago."""
+    if hours <= 0:
+        return ""
+    return f"newer_than:{hours}h"
 
 
 class EmailMessage(BaseModel):
@@ -314,6 +322,10 @@ class SendEmailTool(Tool):
             raise ValueError("Email subject is required")
         if not body:
             raise ValueError("Email body is required")
+
+        allowed, error = validate_outbound_email(to=to, cc=cc)
+        if not allowed:
+            return SendEmailResult(success=False, message=error)
 
         credentials = load_credentials()
         if not credentials:

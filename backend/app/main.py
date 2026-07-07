@@ -7,6 +7,7 @@ from app.config import settings
 from app.ai.config import settings as ai_settings
 from app.agents.email_recap import settings as recap_settings
 from app.agents.scheduler import shutdown_scheduler, scheduler_running, start_scheduler
+from app.google.email_safety import OUTBOUND_EMAIL_ENABLED
 from app.routes.ai import router as ai_router
 from app.routes.agents import router as agents_router
 from app.routes.google_auth import router as google_auth_router
@@ -72,6 +73,7 @@ def health() -> dict[str, str | bool]:
         "google_drive_working": drive_ok,
         "email_recap_enabled": recap_settings.ENABLED,
         "email_recap_scheduler_running": scheduler_running(),
+        "outbound_email_enabled": OUTBOUND_EMAIL_ENABLED,
     }
 
 

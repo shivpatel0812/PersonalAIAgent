@@ -5,6 +5,11 @@ from fastapi import APIRouter, HTTPException
 from app.agents.email_recap import settings as recap_settings
 from app.agents.email_recap.job import run_email_recap
 from app.agents.scheduler import scheduler_running
+from app.google.email_safety import (
+    OUTBOUND_EMAIL_ENABLED,
+    ONLY_CONNECTED_ACCOUNT_RECIPIENTS,
+    get_connected_account_emails,
+)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -26,6 +31,9 @@ def email_recap_status() -> dict:
         "schedule": schedule,
         "max_emails_per_account": recap_settings.MAX_EMAILS_PER_ACCOUNT,
         "recipient_override": recap_settings.RECIPIENT_OVERRIDE or None,
+        "outbound_email_enabled": OUTBOUND_EMAIL_ENABLED,
+        "only_connected_account_recipients": ONLY_CONNECTED_ACCOUNT_RECIPIENTS,
+        "allowed_recipients": get_connected_account_emails(),
     }
 
 

@@ -111,6 +111,9 @@ async def run_email_recap(slot: RecapSlot = "morning") -> dict:
             "accounts_scanned": account_emails,
             "message_id": sent.get("id"),
         }
+    except ValueError as exc:
+        logger.warning("Recap email blocked: %s", exc)
+        return {"status": "skipped", "reason": str(exc), "slot": slot}
     except Exception as exc:
         logger.exception("Failed to send recap email: %s", exc)
         return {"status": "error", "reason": str(exc)}
