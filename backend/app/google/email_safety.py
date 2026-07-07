@@ -8,7 +8,7 @@ from app.db.google_accounts import list_accounts
 from app.google.oauth import _run_async
 
 # Set True when you want outbound email (recap + agent send_email) to work again.
-OUTBOUND_EMAIL_ENABLED = False
+OUTBOUND_EMAIL_ENABLED = True
 
 # When True, recipients must match a connected Google account email exactly.
 ONLY_CONNECTED_ACCOUNT_RECIPIENTS = True
