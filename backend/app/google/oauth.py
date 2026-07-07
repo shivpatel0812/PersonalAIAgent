@@ -40,9 +40,15 @@ SCOPE_GROUPS = {
     ],
 }
 
+# OpenID scopes needed to resolve account email during OAuth connect.
+OIDC_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+]
+
 # All scopes combined (for backward compatibility)
 ALL_SCOPES = [
-    "https://www.googleapis.com/auth/userinfo.email",
+    *OIDC_SCOPES,
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
@@ -234,8 +240,19 @@ def exchange_code_for_credentials(code: str, scopes: list[str] | None = None) ->
     Returns:
         Tuple of (credentials, account_id)
     """
+    import os
+
     flow = create_oauth_flow(scopes=scopes)
-    flow.fetch_token(code=code)
+    # Google may add OIDC scopes or return them in a different order.
+    previous_relax = os.environ.get("OAUTHLIB_RELAX_TOKEN_SCOPE")
+    os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+    try:
+        flow.fetch_token(code=code)
+    finally:
+        if previous_relax is None:
+            os.environ.pop("OAUTHLIB_RELAX_TOKEN_SCOPE", None)
+        else:
+            os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = previous_relax
     credentials = flow.credentials
 
     email = _get_user_email(credentials)
