@@ -16,7 +16,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the email recap agent")
     parser.add_argument(
         "--slot",
-        choices=["morning", "evening"],
+        choices=["morning", "noon", "evening", "night"],
         default="morning",
         help="Recap time slot (affects lookback window and subject)",
     )

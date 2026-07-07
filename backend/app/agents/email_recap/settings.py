@@ -3,12 +3,14 @@
 # Master switch
 ENABLED = True
 
-# Schedule (America/New_York)
+# Schedule (America/New_York) — (hour, minute, slot name)
+SCHEDULE = [
+    (9, 0, "morning"),   # 9:00 AM
+    (12, 0, "noon"),     # 12:00 PM
+    (17, 0, "evening"),  # 5:00 PM
+    (23, 0, "night"),    # 11:00 PM
+]
 TIMEZONE = "America/New_York"
-MORNING_HOUR = 0
-MORNING_MINUTE = 39
-EVENING_HOUR = 17
-EVENING_MINUTE = 0
 
 # How many recent inbox emails to scan per connected account
 MAX_EMAILS_PER_ACCOUNT = 25

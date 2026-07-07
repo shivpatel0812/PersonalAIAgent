@@ -31,15 +31,29 @@ def summarize_email_recap(
     account_emails: list[str],
 ) -> str:
     """Turn raw email metadata into a readable recap email body."""
+    slot_labels = {
+        "morning": "morning",
+        "noon": "afternoon",
+        "evening": "evening",
+        "night": "evening",
+    }
+    greeting = slot_labels.get(slot, "day")
+
     if not emails:
         accounts = ", ".join(account_emails) if account_emails else "your inbox"
         return (
-            f"Good {'morning' if slot == 'morning' else 'evening'}!\n\n"
+            f"Good {greeting}!\n\n"
             f"No notable new emails in {accounts} since the last check.\n\n"
             "You're all caught up."
         )
 
-    slot_label = "Morning" if slot == "morning" else "Evening"
+    display_labels = {
+        "morning": "Morning",
+        "noon": "Midday",
+        "evening": "Evening",
+        "night": "Night",
+    }
+    slot_label = display_labels.get(slot, "Email")
     system_prompt = f"""You are a personal executive assistant writing a {slot_label.lower()} email recap.
 
 Review the JSON list of recent emails and write a concise plain-text email body for the user.

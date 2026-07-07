@@ -12,12 +12,18 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 @router.get("/email-recap/status")
 def email_recap_status() -> dict:
     """Check whether the email recap agent is enabled and scheduled."""
+    schedule = [
+        {
+            "slot": slot,
+            "time": f"{hour:02d}:{minute:02d}",
+        }
+        for hour, minute, slot in recap_settings.SCHEDULE
+    ]
     return {
         "enabled": recap_settings.ENABLED,
         "scheduler_running": scheduler_running(),
         "timezone": recap_settings.TIMEZONE,
-        "morning": f"{recap_settings.MORNING_HOUR:02d}:{recap_settings.MORNING_MINUTE:02d}",
-        "evening": f"{recap_settings.EVENING_HOUR:02d}:{recap_settings.EVENING_MINUTE:02d}",
+        "schedule": schedule,
         "max_emails_per_account": recap_settings.MAX_EMAILS_PER_ACCOUNT,
         "recipient_override": recap_settings.RECIPIENT_OVERRIDE or None,
     }
@@ -25,7 +31,7 @@ def email_recap_status() -> dict:
 
 @router.post("/email-recap/run")
 async def trigger_email_recap(
-    slot: Literal["morning", "evening"] = "morning",
+    slot: Literal["morning", "noon", "evening", "night"] = "morning",
 ) -> dict:
     """Manually run the email recap agent (useful for testing)."""
     if not recap_settings.ENABLED:

@@ -17,11 +17,20 @@ from app.google.oauth import load_credentials
 
 logger = logging.getLogger(__name__)
 
-RecapSlot = Literal["morning", "evening"]
+RecapSlot = Literal["morning", "noon", "evening", "night"]
 
 LOOKBACK_HOURS = {
-    "morning": 14,
-    "evening": 10,
+    "morning": 10,  # overnight since ~11 PM
+    "noon": 4,      # since 9 AM
+    "evening": 6,   # since noon
+    "night": 7,     # since 5 PM
+}
+
+SLOT_LABELS = {
+    "morning": "Morning",
+    "noon": "Midday",
+    "evening": "Evening",
+    "night": "Night",
 }
 
 
@@ -80,7 +89,7 @@ async def run_email_recap(slot: RecapSlot = "morning") -> dict:
 
     tz = pytz.timezone(recap_settings.TIMEZONE)
     now = datetime.now(tz)
-    slot_label = "Morning" if slot == "morning" else "Evening"
+    slot_label = SLOT_LABELS.get(slot, "Email")
     subject = f"{slot_label} Email Recap — {now.strftime('%a %b %d')}"
 
     recipient = recap_settings.RECIPIENT_OVERRIDE or primary.email
