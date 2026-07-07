@@ -39,18 +39,25 @@ export function GoogleCalendarPanel({ refreshKey = 0 }: GoogleCalendarPanelProps
   }
 
   useEffect(() => {
-    loadData();
-  }, [refreshKey]);
-
-  // Refresh after OAuth redirect
-  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('google_calendar') === 'connected') {
-      loadData();
-      // Clean up URL
-      window.history.replaceState({}, '', window.location.pathname);
+    const oauthResult = params.get("google_calendar");
+
+    if (oauthResult === "error") {
+      const message =
+        params.get("message")?.replace(/\+/g, " ") ||
+        "Google sign-in failed. Try again.";
+      setError(decodeURIComponent(message));
+      setLoading(false);
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
     }
-  }, []);
+
+    loadData().then(() => {
+      if (oauthResult === "connected") {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    });
+  }, [refreshKey]);
 
   async function handleDeleteAccount(accountId: string) {
     if (!confirm("Are you sure you want to disconnect this account?")) return;

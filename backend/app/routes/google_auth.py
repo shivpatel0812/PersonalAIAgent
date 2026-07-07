@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -20,6 +22,7 @@ from app.google.oauth import (
     get_granted_services,
     get_service_from_scope,
     has_stored_credentials,
+    migrate_legacy_token_to_db,
     test_calendar_access,
 )
 
@@ -185,7 +188,7 @@ def google_calendar_connect(services: list[str] = Query(default=[])):
 def google_calendar_callback(code: str | None = None, error: str | None = None):
     if error:
         return RedirectResponse(
-            url=f"{settings.frontend_url}?google_calendar=error&message={error}"
+            url=f"{settings.frontend_url}?google_calendar=error&message={quote(error)}"
         )
 
     if not code:
@@ -200,7 +203,7 @@ def google_calendar_callback(code: str | None = None, error: str | None = None):
         import traceback
         traceback.print_exc()
         return RedirectResponse(
-            url=f"{settings.frontend_url}?google_calendar=error&message={str(exc)}"
+            url=f"{settings.frontend_url}?google_calendar=error&message={quote(str(exc))}"
         )
 
     return RedirectResponse(url=f"{settings.frontend_url}?google_calendar=connected")
@@ -218,6 +221,7 @@ def google_calendar_disconnect() -> dict[str, str]:
 @router.get("/accounts", response_model=AccountsListResponse)
 async def get_accounts() -> AccountsListResponse:
     """Get all connected Google accounts."""
+    await migrate_legacy_token_to_db()
     accounts = await list_accounts()
 
     account_infos = []

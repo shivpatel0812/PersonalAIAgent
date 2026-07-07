@@ -1,4 +1,6 @@
 from pathlib import Path
+import asyncio
+import concurrent.futures
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -40,6 +42,7 @@ SCOPE_GROUPS = {
 
 # All scopes combined (for backward compatibility)
 ALL_SCOPES = [
+    "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
@@ -51,6 +54,17 @@ ALL_SCOPES = [
 ]
 
 TOKEN_PATH = Path(__file__).resolve().parent.parent.parent / ".data" / "google_token.json"
+
+
+def _run_async(coro):
+    """Run async DB helpers from sync OAuth code paths."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 def _client_config() -> dict:
@@ -96,43 +110,32 @@ def load_credentials(account_id: str | None = None) -> Credentials | None:
     Returns:
         Credentials object or None if not found
     """
-    import asyncio
-
-    # Run async function in sync context
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
+    async def _load() -> Credentials | None:
         if account_id:
-            account = loop.run_until_complete(get_account(account_id))
+            account = await get_account(account_id)
         else:
-            account = loop.run_until_complete(get_primary_account())
+            account = await get_primary_account()
 
         if not account:
-            # Fallback to file-based token for backward compatibility
             return load_credentials_from_file()
 
         credentials = account.to_credentials()
 
-        # Refresh if expired
         if credentials.expired and credentials.refresh_token:
             try:
                 credentials.refresh(Request())
-                # Save refreshed credentials
-                loop.run_until_complete(
-                    save_account(
-                        credentials,
-                        account.email,
-                        account.account_label,
-                        account.is_primary,
-                    )
+                await save_account(
+                    credentials,
+                    account.email,
+                    account.account_label,
+                    account.is_primary,
                 )
             except Exception:
                 pass
 
         return credentials
-    finally:
-        loop.close()
+
+    return _run_async(_load())
 
 
 def load_credentials_from_file() -> Credentials | None:
@@ -152,7 +155,50 @@ def load_credentials_from_file() -> Credentials | None:
 
 
 def has_stored_credentials() -> bool:
-    return TOKEN_PATH.exists()
+    if TOKEN_PATH.exists():
+        return True
+
+    try:
+        accounts = _run_async(list_accounts())
+        return len(accounts) > 0
+    except Exception:
+        return False
+
+
+def _get_user_email(credentials: Credentials) -> str:
+    """Resolve the Google account email using the lightest available API."""
+    # Prefer OAuth userinfo (works without Gmail API enabled).
+    try:
+        oauth2_service = build("oauth2", "v2", credentials=credentials, cache_discovery=False)
+        profile = oauth2_service.userinfo().get().execute()
+        email = profile.get("email")
+        if email:
+            return email
+    except Exception:
+        pass
+
+    try:
+        gmail_service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+        profile = gmail_service.users().getProfile(userId="me").execute()
+        email = profile.get("emailAddress")
+        if email:
+            return email
+    except Exception:
+        pass
+
+    try:
+        drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+        about = drive_service.about().get(fields="user").execute()
+        email = about.get("user", {}).get("emailAddress")
+        if email:
+            return email
+    except Exception:
+        pass
+
+    raise ValueError(
+        "Connected to Google but could not read your account email. "
+        "Enable the Google OAuth userinfo scopes or Gmail API, then try again."
+    )
 
 
 def get_authorization_url(scopes: list[str] | None = None) -> str:
@@ -180,38 +226,60 @@ def exchange_code_for_credentials(code: str, scopes: list[str] | None = None) ->
         scopes: List of scope URLs that were requested
 
     Returns:
-        Tuple of (credentials, email, account_id)
+        Tuple of (credentials, account_id)
     """
-    import asyncio
-
     flow = create_oauth_flow(scopes=scopes)
     flow.fetch_token(code=code)
     credentials = flow.credentials
 
-    # Get user email from credentials
-    gmail_service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
-    profile = gmail_service.users().getProfile(userId="me").execute()
-    email = profile.get("emailAddress", "unknown@gmail.com")
+    email = _get_user_email(credentials)
 
-    # Save to database
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        # First account becomes primary
-        accounts = loop.run_until_complete(list_accounts())
+    async def _save() -> str:
+        accounts = await list_accounts()
         is_primary = len(accounts) == 0
-
-        account = loop.run_until_complete(
-            save_account(credentials, email, account_label=None, is_primary=is_primary)
+        account = await save_account(
+            credentials,
+            email,
+            account_label=None,
+            is_primary=is_primary,
         )
-        return credentials, account.id
-    finally:
-        loop.close()
+        return account.id
+
+    account_id = _run_async(_save())
+    save_credentials(credentials)
+    return credentials, account_id
+
+
+async def migrate_legacy_token_to_db() -> None:
+    """Import a legacy file-based token into google_accounts when the table is empty."""
+    try:
+        accounts = await list_accounts()
+        if accounts:
+            return
+
+        credentials = load_credentials_from_file()
+        if not credentials:
+            return
+
+        email = _get_user_email(credentials)
+        await save_account(credentials, email, account_label=None, is_primary=True)
+    except Exception as exc:
+        print(f"Legacy Google token migration failed: {exc}")
 
 
 def clear_credentials() -> None:
     if TOKEN_PATH.exists():
         TOKEN_PATH.unlink()
+
+    async def _clear() -> None:
+        accounts = await list_accounts()
+        for account in accounts:
+            await delete_account(account.id)
+
+    try:
+        _run_async(_clear())
+    except Exception as exc:
+        print(f"Failed to clear Google accounts from database: {exc}")
 
 
 def get_granted_scopes(account_id: str | None = None) -> list[str]:

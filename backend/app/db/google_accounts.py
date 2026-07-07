@@ -138,13 +138,14 @@ async def save_account(
     supabase = get_supabase_client()
 
     # Convert credentials to dict for storage
+    scopes = credentials.scopes or []
     tokens = {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
         "token_uri": credentials.token_uri,
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,
-        "scopes": credentials.scopes,
+        "scopes": scopes,
     }
 
     # Check if account already exists
@@ -156,14 +157,16 @@ async def save_account(
 
         # If setting as primary, unset other primaries
         if is_primary:
-            supabase.table("google_accounts").update({"is_primary": False}).neq("id", account_id).execute()
+            supabase.table("google_accounts").update({"is_primary": False}).eq(
+                "is_primary", True
+            ).execute()
 
         result = (
             supabase.table("google_accounts")
             .update(
                 {
                     "tokens": tokens,
-                    "granted_scopes": credentials.scopes,
+                    "granted_scopes": scopes,
                     "account_label": account_label,
                     "is_primary": is_primary,
                 }
@@ -174,7 +177,9 @@ async def save_account(
     else:
         # If setting as primary, unset other primaries
         if is_primary:
-            supabase.table("google_accounts").update({"is_primary": False}).execute()
+            supabase.table("google_accounts").update({"is_primary": False}).eq(
+                "is_primary", True
+            ).execute()
 
         # If this is the first account, make it primary
         accounts_count = len((await list_accounts()))
@@ -188,7 +193,7 @@ async def save_account(
                 {
                     "email": email,
                     "tokens": tokens,
-                    "granted_scopes": credentials.scopes,
+                    "granted_scopes": scopes,
                     "account_label": account_label,
                     "is_primary": is_primary,
                 }
@@ -250,7 +255,9 @@ async def set_primary_account(account_id: str) -> GoogleAccount | None:
     supabase = get_supabase_client()
 
     # Unset all primaries
-    supabase.table("google_accounts").update({"is_primary": False}).execute()
+    supabase.table("google_accounts").update({"is_primary": False}).eq(
+        "is_primary", True
+    ).execute()
 
     # Set this one as primary
     result = (
