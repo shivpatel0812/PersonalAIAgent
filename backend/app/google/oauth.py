@@ -6,8 +6,40 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 from app.config import settings
+from app.db.google_accounts import (
+    delete_account,
+    get_account,
+    get_primary_account,
+    list_accounts,
+    save_account,
+    set_primary_account as db_set_primary_account,
+    update_account_label,
+)
 
-SCOPES = [
+# Scope groups organized by service
+SCOPE_GROUPS = {
+    "gmail": [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.modify",
+    ],
+    "calendar": [
+        "https://www.googleapis.com/auth/calendar",
+    ],
+    "drive": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/documents",
+    ],
+    "sheets": [
+        "https://www.googleapis.com/auth/spreadsheets",
+    ],
+    "youtube": [
+        "https://www.googleapis.com/auth/youtube.readonly",
+    ],
+}
+
+# All scopes combined (for backward compatibility)
+ALL_SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
@@ -17,6 +49,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/youtube.readonly",
 ]
+
 TOKEN_PATH = Path(__file__).resolve().parent.parent.parent / ".data" / "google_token.json"
 
 
@@ -32,24 +65,81 @@ def _client_config() -> dict:
     }
 
 
-def create_oauth_flow() -> Flow:
+def create_oauth_flow(scopes: list[str] | None = None) -> Flow:
+    """
+    Create OAuth flow with custom scopes.
+
+    Args:
+        scopes: List of scope URLs to request. If None, requests all scopes.
+    """
+    selected_scopes = scopes if scopes is not None else ALL_SCOPES
     return Flow.from_client_config(
         _client_config(),
-        scopes=SCOPES,
+        scopes=selected_scopes,
         redirect_uri=settings.google_redirect_uri,
     )
 
 
 def save_credentials(credentials: Credentials) -> None:
+    """Legacy function - saves to file. Use save_account_credentials instead."""
     TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     TOKEN_PATH.write_text(credentials.to_json())
 
 
-def load_credentials() -> Credentials | None:
+def load_credentials(account_id: str | None = None) -> Credentials | None:
+    """
+    Load credentials for a specific account or the primary account.
+
+    Args:
+        account_id: Optional account ID. If None, loads primary account.
+
+    Returns:
+        Credentials object or None if not found
+    """
+    import asyncio
+
+    # Run async function in sync context
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        if account_id:
+            account = loop.run_until_complete(get_account(account_id))
+        else:
+            account = loop.run_until_complete(get_primary_account())
+
+        if not account:
+            # Fallback to file-based token for backward compatibility
+            return load_credentials_from_file()
+
+        credentials = account.to_credentials()
+
+        # Refresh if expired
+        if credentials.expired and credentials.refresh_token:
+            try:
+                credentials.refresh(Request())
+                # Save refreshed credentials
+                loop.run_until_complete(
+                    save_account(
+                        credentials,
+                        account.email,
+                        account.account_label,
+                        account.is_primary,
+                    )
+                )
+            except Exception:
+                pass
+
+        return credentials
+    finally:
+        loop.close()
+
+
+def load_credentials_from_file() -> Credentials | None:
+    """Load credentials from legacy token file."""
     if not TOKEN_PATH.exists():
         return None
 
-    # Use scopes stored in the token file so refresh works before re-auth adds Gmail scopes.
     credentials = Credentials.from_authorized_user_file(str(TOKEN_PATH))
     if credentials.expired and credentials.refresh_token:
         try:
@@ -65,8 +155,14 @@ def has_stored_credentials() -> bool:
     return TOKEN_PATH.exists()
 
 
-def get_authorization_url() -> str:
-    flow = create_oauth_flow()
+def get_authorization_url(scopes: list[str] | None = None) -> str:
+    """
+    Get OAuth authorization URL with custom scopes.
+
+    Args:
+        scopes: List of scope URLs to request. If None, requests all scopes.
+    """
+    flow = create_oauth_flow(scopes=scopes)
     authorization_url, _state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
@@ -75,17 +171,138 @@ def get_authorization_url() -> str:
     return authorization_url
 
 
-def exchange_code_for_credentials(code: str) -> Credentials:
-    flow = create_oauth_flow()
+def exchange_code_for_credentials(code: str, scopes: list[str] | None = None) -> tuple[Credentials, str]:
+    """
+    Exchange OAuth code for credentials and save to database.
+
+    Args:
+        code: OAuth authorization code
+        scopes: List of scope URLs that were requested
+
+    Returns:
+        Tuple of (credentials, email, account_id)
+    """
+    import asyncio
+
+    flow = create_oauth_flow(scopes=scopes)
     flow.fetch_token(code=code)
     credentials = flow.credentials
-    save_credentials(credentials)
-    return credentials
+
+    # Get user email from credentials
+    gmail_service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+    profile = gmail_service.users().getProfile(userId="me").execute()
+    email = profile.get("emailAddress", "unknown@gmail.com")
+
+    # Save to database
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        # First account becomes primary
+        accounts = loop.run_until_complete(list_accounts())
+        is_primary = len(accounts) == 0
+
+        account = loop.run_until_complete(
+            save_account(credentials, email, account_label=None, is_primary=is_primary)
+        )
+        return credentials, account.id
+    finally:
+        loop.close()
 
 
 def clear_credentials() -> None:
     if TOKEN_PATH.exists():
         TOKEN_PATH.unlink()
+
+
+def get_granted_scopes(account_id: str | None = None) -> list[str]:
+    """
+    Get list of scopes that have been granted for an account.
+
+    Args:
+        account_id: Optional account ID. If None, uses primary account.
+
+    Returns:
+        List of granted scope URLs, or empty list if not connected.
+    """
+    credentials = load_credentials(account_id)
+    if credentials is None:
+        return []
+    return credentials.scopes or []
+
+
+def build_scopes_from_services(services: list[str]) -> list[str]:
+    """
+    Build scope list from service names.
+
+    Args:
+        services: List of service names (e.g., ["gmail", "calendar"])
+
+    Returns:
+        Combined list of scope URLs for requested services
+    """
+    scopes = []
+    for service in services:
+        if service in SCOPE_GROUPS:
+            scopes.extend(SCOPE_GROUPS[service])
+    return scopes
+
+
+def get_service_from_scope(scope_url: str) -> str | None:
+    """
+    Get service name from scope URL.
+
+    Args:
+        scope_url: Scope URL (e.g., "https://www.googleapis.com/auth/calendar")
+
+    Returns:
+        Service name (e.g., "calendar") or None if not found
+    """
+    for service, scopes in SCOPE_GROUPS.items():
+        if scope_url in scopes:
+            return service
+    return None
+
+
+def get_granted_services(account_id: str | None = None) -> list[str]:
+    """
+    Get list of services that have been granted access for an account.
+
+    Args:
+        account_id: Optional account ID. If None, uses primary account.
+
+    Returns:
+        List of service names (e.g., ["gmail", "calendar"])
+    """
+    granted_scopes = get_granted_scopes(account_id)
+    services = set()
+    for scope in granted_scopes:
+        service = get_service_from_scope(scope)
+        if service:
+            services.add(service)
+    return list(services)
+
+
+# Account management functions
+
+
+async def get_all_accounts():
+    """Get all connected Google accounts."""
+    return await list_accounts()
+
+
+async def remove_account(account_id: str) -> bool:
+    """Remove a Google account."""
+    return await delete_account(account_id)
+
+
+async def set_primary(account_id: str):
+    """Set an account as primary."""
+    return await db_set_primary_account(account_id)
+
+
+async def rename_account(account_id: str, label: str | None):
+    """Update an account's label."""
+    return await update_account_label(account_id, label)
 
 
 def test_calendar_access() -> dict[str, str | bool | int | None]:
