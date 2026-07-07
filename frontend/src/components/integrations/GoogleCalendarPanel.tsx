@@ -141,7 +141,7 @@ export function GoogleCalendarPanel({
           <p className="text-sm text-slate-400">No Google accounts connected</p>
           <button
             type="button"
-            onClick={handleConnectNewAccount}
+            onClick={() => handleConnectNewAccount()}
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 transition hover:border-accent"
           >
             Connect Google Account
@@ -244,7 +244,7 @@ export function GoogleCalendarPanel({
               {/* Add More Services for this account */}
               {account.granted_services.length < availableServices.length && (
                 <button
-                  onClick={handleConnectNewAccount}
+                  onClick={() => handleConnectNewAccount()}
                   className="mt-2 w-full rounded border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-400 transition hover:border-accent/50 hover:text-accent"
                 >
                   + Add more services to this account
