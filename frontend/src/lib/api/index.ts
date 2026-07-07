@@ -8,5 +8,13 @@ export {
   createThread,
   deleteThread,
 } from "./conversations";
+export {
+  fetchEmailAgentItems,
+  fetchEmailAgentItem,
+  scanEmailAgentInbox,
+  adjustEmailDraft,
+  approveEmailDraft,
+  discardEmailItem,
+} from "./emailAgent";
 export type { ResearchRequest, StreamCallbacks } from "./research";
 export type { AgentRunSummary, AgentRunDetail } from "./runs";

@@ -34,13 +34,19 @@ def get_connected_account_emails() -> list[str]:
     return [account.email.lower() for account in accounts]
 
 
-def validate_outbound_email(*, to: str, cc: str = "") -> tuple[bool, str]:
+def validate_outbound_email(
+    *,
+    to: str,
+    cc: str = "",
+    allowed_extra_recipients: set[str] | None = None,
+) -> tuple[bool, str]:
     """
     Return (allowed, error_message).
 
     Blocks all outbound email when OUTBOUND_EMAIL_ENABLED is False.
     When ONLY_CONNECTED_ACCOUNT_RECIPIENTS is True, every To/CC address must be
-    one of the user's connected Google account emails (self-only).
+    one of the user's connected Google account emails (self-only), unless the
+    address appears in allowed_extra_recipients (e.g. thread participants for replies).
     """
     if not OUTBOUND_EMAIL_ENABLED:
         return False, "Outbound email is temporarily disabled."
@@ -53,6 +59,8 @@ def validate_outbound_email(*, to: str, cc: str = "") -> tuple[bool, str]:
         return True, ""
 
     allowed = set(get_connected_account_emails())
+    if allowed_extra_recipients:
+        allowed |= {_normalize_email(email) for email in allowed_extra_recipients}
     if not allowed:
         return False, "No connected Google accounts found."
 

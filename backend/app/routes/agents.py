@@ -3,6 +3,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 
 from app.agents.email_recap import settings as recap_settings
+from app.agents.email_agent import settings as email_agent_settings
+from app.agents.email_agent.job import run_email_agent_scan
 from app.agents.email_recap.job import run_email_recap
 from app.agents.scheduler import scheduler_running
 from app.google.email_safety import (
@@ -48,5 +50,31 @@ async def trigger_email_recap(
     result = await run_email_recap(slot=slot)
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("reason", "Recap failed"))
+
+    return result
+
+
+@router.get("/email-agent/status")
+async def email_agent_status() -> dict:
+    from app.db.email_agent import count_active_items
+
+    return {
+        "enabled": email_agent_settings.ENABLED,
+        "scheduler_running": scheduler_running(),
+        "scan_interval_minutes": email_agent_settings.SCAN_INTERVAL_MINUTES,
+        "active_count": await count_active_items(),
+        "max_queue_size": email_agent_settings.MAX_ACTIVE_QUEUE_SIZE,
+    }
+
+
+@router.post("/email-agent/run")
+async def trigger_email_agent() -> dict:
+    """Manually run the email agent inbox scan."""
+    if not email_agent_settings.ENABLED:
+        raise HTTPException(status_code=503, detail="Email agent is disabled")
+
+    result = await run_email_agent_scan()
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("reason", "Scan failed"))
 
     return result

@@ -1,9 +1,14 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { GoogleAccountsBar } from "../integrations/GoogleAccountsBar";
 import {
-  PLACEHOLDER_EMAIL_ITEMS,
-  type DraftChatMessage,
-  type EmailAgentItem,
-} from "../../types/emailAgent";
+  adjustEmailDraft,
+  approveEmailDraft,
+  discardEmailItem,
+  fetchEmailAgentItem,
+  fetchEmailAgentItems,
+  scanEmailAgentInbox,
+} from "../../lib/api/emailAgent";
+import type { DraftChatMessage, EmailAgentItem } from "../../types/emailAgent";
 
 const STATUS_LABELS = {
   needs_draft: "Drafting…",
@@ -11,29 +16,29 @@ const STATUS_LABELS = {
   waiting_on_you: "Needs your input",
 } as const;
 
-function buildInitialChat(item: EmailAgentItem): DraftChatMessage[] {
-  return [
-    {
-      id: `${item.id}-welcome`,
-      role: "assistant",
-      content:
-        "I've drafted a reply based on the email thread. Tell me what to change — tone, length, or details to add — and I'll update the response below. Nothing sends until you approve.",
-    },
-  ];
-}
+type EmailAgentPanelProps = {
+  googleRefreshKey?: number;
+  googleOauthReturn?: "connected" | "error" | null;
+  googleOauthError?: string | null;
+  onQueueCountChange?: (count: number) => void;
+};
 
-export function EmailAgentPanel() {
-  const [items] = useState<EmailAgentItem[]>(PLACEHOLDER_EMAIL_ITEMS);
-  const [selectedId, setSelectedId] = useState(items[0]?.id ?? "");
-  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
-    Object.fromEntries(items.map((item) => [item.id, item.draftResponse]))
-  );
-  const [chatByEmail, setChatByEmail] = useState<Record<string, DraftChatMessage[]>>(() =>
-    Object.fromEntries(items.map((item) => [item.id, buildInitialChat(item)]))
-  );
+export function EmailAgentPanel({
+  googleRefreshKey = 0,
+  googleOauthReturn = null,
+  googleOauthError = null,
+  onQueueCountChange,
+}: EmailAgentPanelProps) {
+  const [items, setItems] = useState<EmailAgentItem[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [chatByEmail, setChatByEmail] = useState<Record<string, DraftChatMessage[]>>({});
   const [chatInput, setChatInput] = useState("");
   const [adjusting, setAdjusting] = useState(false);
-  const [approvedId, setApprovedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) ?? items[0],
@@ -42,151 +47,235 @@ export function EmailAgentPanel() {
 
   const chatMessages = selected ? chatByEmail[selected.id] ?? [] : [];
 
-  function handleAdjustDraft() {
+  const loadItemDetail = useCallback(async (itemId: string) => {
+    const detail = await fetchEmailAgentItem(itemId);
+    setDrafts((prev) => ({ ...prev, [itemId]: detail.item.draftResponse }));
+    setChatByEmail((prev) => ({ ...prev, [itemId]: detail.chatMessages }));
+  }, []);
+
+  const loadQueue = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const queue = await fetchEmailAgentItems();
+      setItems(queue);
+      onQueueCountChange?.(queue.length);
+      if (queue.length > 0) {
+        const firstId = queue[0].id;
+        setSelectedId((current) => current || firstId);
+        setDrafts(Object.fromEntries(queue.map((item) => [item.id, item.draftResponse])));
+        await loadItemDetail(queue[0].id);
+      } else {
+        setSelectedId("");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load email queue");
+    } finally {
+      setLoading(false);
+    }
+  }, [loadItemDetail, onQueueCountChange]);
+
+  useEffect(() => {
+    void loadQueue();
+  }, [loadQueue]);
+
+  async function handleSelectItem(itemId: string) {
+    setSelectedId(itemId);
+    if (!chatByEmail[itemId]) {
+      try {
+        await loadItemDetail(itemId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load email");
+      }
+    }
+  }
+
+  async function handleScan() {
+    setScanning(true);
+    setError(null);
+    try {
+      await scanEmailAgentInbox();
+      await loadQueue();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Scan failed");
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function handleAdjustDraft() {
     if (!selected || !chatInput.trim()) return;
+
+    const message = chatInput.trim();
+    setChatInput("");
+    setAdjusting(true);
+    setError(null);
 
     const userMessage: DraftChatMessage = {
       id: `${selected.id}-user-${Date.now()}`,
       role: "user",
-      content: chatInput.trim(),
+      content: message,
     };
-
     setChatByEmail((prev) => ({
       ...prev,
       [selected.id]: [...(prev[selected.id] ?? []), userMessage],
     }));
-    setChatInput("");
-    setAdjusting(true);
 
-  // Simulate backend revision until API is wired
-    window.setTimeout(() => {
-      const note =
-        "I've updated the draft with your feedback. Review the response on the left — approve when you're happy, or keep refining here.";
-
-      setDrafts((prev) => ({
-        ...prev,
-        [selected.id]: `${prev[selected.id]}\n\n[Updated per your note: "${userMessage.content}"]`,
-      }));
-
+    try {
+      const result = await adjustEmailDraft(selected.id, message);
+      setDrafts((prev) => ({ ...prev, [selected.id]: result.draftResponse }));
       setChatByEmail((prev) => ({
         ...prev,
-        [selected.id]: [
-          ...(prev[selected.id] ?? []),
-          {
-            id: `${selected.id}-assistant-${Date.now()}`,
-            role: "assistant",
-            content: note,
-          },
-        ],
+        [selected.id]: [...(prev[selected.id] ?? []), result.assistantMessage],
       }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to adjust draft");
+    } finally {
       setAdjusting(false);
-    }, 700);
+    }
   }
 
-  function handleApprove() {
+  async function handleApprove() {
     if (!selected) return;
-    setApprovedId(selected.id);
-    setChatByEmail((prev) => ({
-      ...prev,
-      [selected.id]: [
-        ...(prev[selected.id] ?? []),
-        {
-          id: `${selected.id}-approved-${Date.now()}`,
-          role: "assistant",
-          content:
-            "Approved locally (placeholder). Sending will be enabled once the backend is connected — no email has been sent.",
-        },
-      ],
-    }));
+
+    setSending(true);
+    setError(null);
+    try {
+      await approveEmailDraft(selected.id, drafts[selected.id] ?? selected.draftResponse);
+      const remaining = items.filter((item) => item.id !== selected.id);
+      setItems(remaining);
+      onQueueCountChange?.(remaining.length);
+      setSelectedId(remaining[0]?.id ?? "");
+      if (remaining[0]) {
+        await loadItemDetail(remaining[0].id);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send email");
+    } finally {
+      setSending(false);
+    }
   }
 
-  if (items.length === 0) {
-    return (
-      <section className="rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-8 text-center">
-        <p className="text-sm font-medium text-slate-200">Email Agent</p>
-        <p className="mt-2 text-sm text-slate-500">
-          No emails need a response right now. When the backend is connected, messages that
-          need a reply will show up here.
-        </p>
-      </section>
-    );
+  async function handleDiscard() {
+    if (!selected) return;
+
+    setError(null);
+    try {
+      await discardEmailItem(selected.id);
+      const remaining = items.filter((item) => item.id !== selected.id);
+      setItems(remaining);
+      onQueueCountChange?.(remaining.length);
+      setSelectedId(remaining[0]?.id ?? "");
+      if (remaining[0]) {
+        await loadItemDetail(remaining[0].id);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to discard email");
+    }
   }
 
   return (
-    <section className="flex min-h-[32rem] flex-col rounded-xl border border-slate-800 bg-slate-900/30">
-      <div className="border-b border-slate-800 px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium text-slate-200">Email Agent</p>
-            <p className="text-xs text-slate-500">
-              Responses need your approval before anything is sent
-            </p>
-          </div>
-          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-300">
-            {items.length} need a response
-          </span>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <GoogleAccountsBar
+        refreshKey={googleRefreshKey}
+        oauthReturn={googleOauthReturn}
+        oauthErrorMessage={googleOauthError}
+      />
+
+      {error && (
+        <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2">
+          <p className="text-xs text-red-300">{error}</p>
         </div>
-      </div>
+      )}
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        {/* Queue */}
-        <aside className="border-b border-slate-800 lg:w-56 lg:shrink-0 lg:border-b-0 lg:border-r">
-          <p className="px-4 py-3 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-            Inbox
-          </p>
-          <div className="space-y-1 px-2 pb-3">
-            {items.map((item) => {
-              const isActive = item.id === selected?.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setSelectedId(item.id)}
-                  className={`w-full rounded-lg px-3 py-2.5 text-left transition ${
-                    isActive
-                      ? "border border-accent/40 bg-accent/10"
-                      : "border border-transparent hover:bg-slate-800/60"
-                  }`}
-                >
-                  <p className="truncate text-sm font-medium text-slate-200">
-                    {item.senderName}
-                  </p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">{item.subject}</p>
-                  <p className="mt-1 text-[10px] text-slate-600">
-                    {STATUS_LABELS[item.status]}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-        </aside>
+      {loading ? (
+        <div className="flex flex-1 items-center justify-center">
+          <p className="text-sm text-slate-400">Loading email queue…</p>
+        </div>
+      ) : items.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="text-sm text-slate-400">No emails need a response right now.</p>
+          <button
+            type="button"
+            onClick={() => void handleScan()}
+            disabled={scanning}
+            className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600 disabled:opacity-50"
+          >
+            {scanning ? "Scanning inbox…" : "Scan inbox"}
+          </button>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          {/* Inbox */}
+          <aside className="w-56 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-950/40">
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
+                Inbox
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleScan()}
+                disabled={scanning}
+                className="text-[10px] text-slate-500 transition hover:text-slate-300 disabled:opacity-50"
+              >
+                {scanning ? "…" : "↻"}
+              </button>
+            </div>
+            <div className="space-y-1 px-2 pb-4">
+              {items.map((item) => {
+                const isActive = item.id === selected?.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => void handleSelectItem(item.id)}
+                    className={`w-full rounded-lg px-3 py-3 text-left transition ${
+                      isActive
+                        ? "border border-slate-700 bg-slate-900"
+                        : "border border-transparent hover:bg-slate-900/50"
+                    }`}
+                  >
+                    <p className="truncate text-sm font-medium text-slate-100">
+                      {item.senderName}
+                    </p>
+                    <p className="mt-1 truncate text-xs text-slate-500">{item.subject}</p>
+                    <p className="mt-2 text-[10px] text-slate-600">
+                      {STATUS_LABELS[item.status]}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
 
-        {selected && (
-          <>
-            {/* Email summary + draft */}
-            <div className="flex min-w-0 flex-1 flex-col border-b border-slate-800 lg:border-b-0 lg:border-r">
-              <div className="flex-1 space-y-4 overflow-y-auto p-4">
-                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-                  <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+          {selected && (
+            <>
+              {/* Draft review */}
+              <div className="flex min-w-0 flex-1 flex-col border-r border-slate-800">
+                <div className="flex-1 overflow-y-auto px-6 py-5">
+                  <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="text-sm font-medium text-slate-100">{selected.senderName}</p>
-                      <p className="text-xs text-slate-500">{selected.senderEmail}</p>
+                      <p className="text-sm font-medium text-slate-100">
+                        {selected.senderName}{" "}
+                        <span className="font-normal text-slate-500">
+                          {selected.senderEmail}
+                        </span>
+                      </p>
                     </div>
                     <a
                       href={selected.gmailUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-accent hover:underline"
+                      className="text-xs text-slate-400 transition hover:text-slate-200"
                     >
                       View in Gmail →
                     </a>
                   </div>
-                  <p className="text-sm font-medium text-slate-300">{selected.subject}</p>
-                  <p className="mt-3 text-sm leading-6 text-slate-400">{selected.summary}</p>
-                </div>
 
-                <div>
-                  <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-slate-500">
+                  <p className="text-sm font-semibold text-slate-200">{selected.subject}</p>
+                  <p className="mt-3 text-sm leading-7 text-slate-400">{selected.summary}</p>
+
+                  <p className="mb-2 mt-8 text-[11px] font-medium uppercase tracking-wider text-slate-500">
                     Draft response
                   </p>
                   <textarea
@@ -197,86 +286,92 @@ export function EmailAgentPanel() {
                         [selected.id]: event.target.value,
                       }))
                     }
-                    rows={10}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm leading-6 text-slate-200 outline-none focus:border-accent/50"
+                    rows={12}
+                    className="w-full resize-none rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-200 outline-none focus:border-slate-700"
                   />
                 </div>
-              </div>
 
-              <div className="flex flex-wrap gap-2 border-t border-slate-800 p-4">
-                <button
-                  type="button"
-                  onClick={handleApprove}
-                  disabled={approvedId === selected.id}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {approvedId === selected.id ? "Approved (placeholder)" : "Approve & send"}
-                </button>
-                <button
-                  type="button"
-                  className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600 hover:text-slate-100"
-                >
-                  Discard
-                </button>
-              </div>
-            </div>
-
-            {/* Adjustment chat */}
-            <div className="flex w-full flex-col lg:w-80 xl:w-96">
-              <p className="border-b border-slate-800 px-4 py-3 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                Adjust draft
-              </p>
-              <div className="flex-1 space-y-3 overflow-y-auto p-4">
-                {chatMessages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={message.role === "user" ? "flex justify-end" : "flex justify-start"}
-                  >
-                    <div
-                      className={`max-w-[90%] rounded-2xl px-3 py-2 text-sm leading-6 ${
-                        message.role === "user"
-                          ? "rounded-br-md border border-accent/30 bg-accent/10 text-slate-100"
-                          : "rounded-bl-md border border-slate-800 bg-slate-950/80 text-slate-300"
-                      }`}
-                    >
-                      {message.content}
-                    </div>
-                  </div>
-                ))}
-                {adjusting && (
-                  <p className="text-xs text-slate-500">Updating draft…</p>
-                )}
-              </div>
-              <div className="border-t border-slate-800 p-3">
-                <div className="flex items-end gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
-                  <textarea
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey && !adjusting) {
-                        event.preventDefault();
-                        handleAdjustDraft();
-                      }
-                    }}
-                    placeholder="e.g. Make it shorter, mention Friday works…"
-                    rows={2}
-                    disabled={adjusting}
-                    className="min-h-[2.5rem] flex-1 resize-none bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
-                  />
+                <div className="border-t border-slate-800 px-6 py-4">
                   <button
                     type="button"
-                    onClick={handleAdjustDraft}
-                    disabled={adjusting || !chatInput.trim()}
-                    className="rounded-full bg-accent px-3 py-1.5 text-sm text-white disabled:opacity-40"
+                    onClick={() => void handleApprove()}
+                    disabled={sending}
+                    className="w-full rounded-xl bg-emerald-500 py-3.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    →
+                    {sending ? "Sending…" : "Approve & send"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDiscard()}
+                    className="mt-2 w-full py-2 text-xs text-slate-500 transition hover:text-slate-300"
+                  >
+                    Discard
                   </button>
                 </div>
               </div>
-            </div>
-          </>
-        )}
-      </div>
-    </section>
+
+              {/* Adjust draft */}
+              <div className="flex w-80 shrink-0 flex-col bg-slate-950/30 xl:w-96">
+                <p className="border-b border-slate-800 px-4 py-3 text-[11px] font-medium uppercase tracking-wider text-slate-500">
+                  Adjust draft
+                </p>
+
+                <div className="flex flex-1 flex-col overflow-hidden">
+                  <div className="flex-1 space-y-3 overflow-y-auto p-4">
+                    {chatMessages.length === 0 && (
+                      <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-400">
+                        I&apos;ve drafted a reply based on the email thread. Tell me what to
+                        change — tone, length, or details to add — and I&apos;ll update the
+                        response on the left. Nothing sends until you approve.
+                      </div>
+                    )}
+                    {chatMessages.map((message) => (
+                      <div
+                        key={message.id}
+                        className={
+                          message.role === "user" ? "flex justify-end" : "flex justify-start"
+                        }
+                      >
+                        <div
+                          className={`max-w-[92%] rounded-2xl px-3 py-2.5 text-sm leading-6 ${
+                            message.role === "user"
+                              ? "rounded-br-md bg-slate-800 text-slate-100"
+                              : "rounded-bl-md border border-slate-800 bg-slate-900/80 text-slate-300"
+                          }`}
+                        >
+                          {message.content}
+                        </div>
+                      </div>
+                    ))}
+                    {adjusting && (
+                      <p className="text-xs text-slate-500">Updating draft…</p>
+                    )}
+                  </div>
+
+                  <div className="border-t border-slate-800 p-4">
+                    <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2">
+                      <textarea
+                        value={chatInput}
+                        onChange={(event) => setChatInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey && !adjusting) {
+                            event.preventDefault();
+                            void handleAdjustDraft();
+                          }
+                        }}
+                        placeholder="e.g. Make it shorter, mention Friday works…"
+                        rows={3}
+                        disabled={adjusting}
+                        className="w-full resize-none bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

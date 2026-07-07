@@ -1,0 +1,236 @@
+import { useEffect, useState } from "react";
+import {
+  deleteAccount,
+  fetchAccounts,
+  fetchAvailableServices,
+  setPrimaryAccount,
+  updateAccountLabel,
+  type AccountInfo,
+  type ServiceInfo,
+} from "../../lib/api/google";
+
+type GoogleAccountsBarProps = {
+  refreshKey?: number;
+  oauthReturn?: "connected" | "error" | null;
+  oauthErrorMessage?: string | null;
+};
+
+export function GoogleAccountsBar({
+  refreshKey = 0,
+  oauthReturn = null,
+  oauthErrorMessage = null,
+}: GoogleAccountsBarProps) {
+  const [accounts, setAccounts] = useState<AccountInfo[]>([]);
+  const [availableServices, setAvailableServices] = useState<ServiceInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [editingLabelFor, setEditingLabelFor] = useState<string | null>(null);
+  const [labelInput, setLabelInput] = useState("");
+
+  async function loadData() {
+    setLoading(true);
+    setError(null);
+    try {
+      const [accountsData, servicesData] = await Promise.all([
+        fetchAccounts(),
+        fetchAvailableServices(),
+      ]);
+      setAccounts(accountsData.accounts);
+      setAvailableServices(servicesData.services);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load accounts");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (oauthReturn === "error") {
+      setError(oauthErrorMessage || "Google sign-in failed. Try again.");
+      setLoading(false);
+      setExpanded(true);
+      return;
+    }
+
+    void loadData();
+  }, [refreshKey, oauthReturn, oauthErrorMessage]);
+
+  function handleConnectNewAccount(selectAccount = false) {
+    const base = `${import.meta.env.VITE_API_URL}/auth/google/connect`;
+    const url = selectAccount ? `${base}?select_account=true` : base;
+    sessionStorage.setItem("google_oauth_pending", "1");
+    window.location.href = url;
+  }
+
+  async function handleDeleteAccount(accountId: string) {
+    if (!confirm("Are you sure you want to disconnect this account?")) return;
+    try {
+      await deleteAccount(accountId);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete account");
+    }
+  }
+
+  async function handleSetPrimary(accountId: string) {
+    try {
+      await setPrimaryAccount(accountId);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to set primary account");
+    }
+  }
+
+  async function handleSaveLabel(accountId: string) {
+    try {
+      await updateAccountLabel(accountId, labelInput || null);
+      setEditingLabelFor(null);
+      setLabelInput("");
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update label");
+    }
+  }
+
+  function startEditingLabel(account: AccountInfo) {
+    setEditingLabelFor(account.id);
+    setLabelInput(account.account_label || "");
+  }
+
+  function getServiceLabel(serviceName: string): string {
+    const service = availableServices.find((s) => s.name === serviceName);
+    return service?.label || serviceName;
+  }
+
+  const countLabel = loading
+    ? "Loading…"
+    : accounts.length === 0
+      ? "Not connected"
+      : `${accounts.length} connected`;
+
+  return (
+    <div className="border-b border-slate-800 bg-slate-950/80">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-slate-900/60"
+      >
+        <span className="text-sm text-slate-300">
+          Google Accounts <span className="text-slate-500">•</span> {countLabel}
+        </span>
+        <span className={`text-slate-500 transition ${expanded ? "rotate-180" : ""}`}>▾</span>
+      </button>
+
+      {expanded && (
+        <div className="space-y-3 border-t border-slate-800 px-4 py-4">
+          {error && <p className="text-sm text-red-300">{error}</p>}
+
+          {!loading && accounts.length === 0 && (
+            <button
+              type="button"
+              onClick={() => handleConnectNewAccount()}
+              className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-accent"
+            >
+              Connect Google Account
+            </button>
+          )}
+
+          {accounts.map((account) => (
+            <div
+              key={account.id}
+              className={`rounded-lg border px-3 py-2.5 ${
+                account.is_primary
+                  ? "border-emerald-500/30 bg-emerald-500/5"
+                  : "border-slate-800 bg-slate-900/60"
+              }`}
+            >
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-slate-200">{account.email}</span>
+                    {account.is_primary && (
+                      <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-emerald-400">
+                        Primary
+                      </span>
+                    )}
+                  </div>
+
+                  {editingLabelFor === account.id ? (
+                    <div className="mt-1 flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={labelInput}
+                        onChange={(e) => setLabelInput(e.target.value)}
+                        placeholder="Label (e.g., Work, Personal)"
+                        className="flex-1 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 focus:border-accent focus:outline-none"
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => void handleSaveLabel(account.id)}
+                        className="text-xs text-accent hover:text-accent/80"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingLabelFor(null)}
+                        className="text-xs text-slate-500 hover:text-slate-400"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startEditingLabel(account)}
+                      className="mt-0.5 text-xs text-slate-500 hover:text-slate-300"
+                    >
+                      {account.account_label || "+ Add label"}
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1">
+                  {!account.is_primary && (
+                    <button
+                      onClick={() => void handleSetPrimary(account.id)}
+                      className="rounded px-2 py-1 text-[10px] text-slate-500 transition hover:bg-slate-800 hover:text-slate-300"
+                    >
+                      Set Primary
+                    </button>
+                  )}
+                  <button
+                    onClick={() => void handleDeleteAccount(account.id)}
+                    className="rounded px-2 py-1 text-[10px] text-red-400/80 transition hover:bg-red-500/10 hover:text-red-400"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {account.granted_services.map((serviceName) => (
+                  <span
+                    key={serviceName}
+                    className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400"
+                  >
+                    {getServiceLabel(serviceName)} ✓
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {accounts.length > 0 && (
+            <button
+              type="button"
+              onClick={() => handleConnectNewAccount(true)}
+              className="w-full rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-3 py-2 text-sm text-slate-400 transition hover:border-accent hover:text-accent"
+            >
+              + Add Another Account
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
