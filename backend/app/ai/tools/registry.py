@@ -21,6 +21,8 @@ from app.ai.tools.calendar_tool import (
 from app.ai.tools.gmail_tool import (
     ListEmailsTool,
     ReadEmailTool,
+    ReadEmailThreadTool,
+    GetEmailConversationTool,
     SendEmailTool,
     MarkEmailAsReadTool,
 )
@@ -85,6 +87,8 @@ def get_tool_registry(context_query: str | None = None) -> ToolRegistry:
     # Gmail tools
     registry.register(ListEmailsTool())
     registry.register(ReadEmailTool())
+    registry.register(ReadEmailThreadTool())
+    registry.register(GetEmailConversationTool())
     registry.register(SendEmailTool())
     registry.register(MarkEmailAsReadTool())
 
@@ -145,9 +149,11 @@ Rules:
 - For Gmail, you have full access to read and send emails:
   - list_emails: List recent emails with filters (unread, search query, max results)
   - read_email: Read full email content by ID
-  - send_email: Send new emails to recipients
+  - read_email_thread: Read an entire thread in order (all messages start to finish)
+  - get_email_conversation: Find recent threads with a person and load each full thread — USE THIS before replying
+  - send_email: Send emails; for replies pass thread_id + reply_to_email_id from the conversation tools
   - mark_email_read: Mark emails as read or unread
-  - Use list_emails to find emails, then read_email to get full content
+  - When the user asks to reply/respond to someone: first call get_email_conversation(person=...), read the full thread context, draft the reply, then send_email with thread_id and reply_to_email_id from the latest message
   - When searching emails, use Gmail query syntax: "from:user@example.com", "subject:meeting", "is:unread"
 
 - For Google Drive & Docs, you can access and manage files:
