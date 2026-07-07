@@ -13,6 +13,16 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:8001/auth/google/callback"
     frontend_url: str = "http://localhost:5174"
 
+    # Scheduled email recap agent
+    email_recap_enabled: bool = True
+    email_recap_timezone: str = "America/New_York"
+    email_recap_morning_hour: int = 0
+    email_recap_morning_minute: int = 39
+    email_recap_evening_hour: int = 17
+    email_recap_evening_minute: int = 0
+    email_recap_max_emails_per_account: int = 25
+    email_recap_recipient: str = ""  # defaults to primary Google account email
+
     @property
     def supabase_configured(self) -> bool:
         return bool(self.supabase_url and self.supabase_service_role_key)

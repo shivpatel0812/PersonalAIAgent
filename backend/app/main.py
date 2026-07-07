@@ -1,14 +1,26 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.ai.config import settings as ai_settings
+from app.agents.scheduler import shutdown_scheduler, scheduler_running, start_scheduler
 from app.routes.ai import router as ai_router
+from app.routes.agents import router as agents_router
 from app.routes.google_auth import router as google_auth_router
 from app.supabase_client import get_supabase_client
 from app.google.oauth import has_stored_credentials, test_calendar_access
 
-app = FastAPI(title="Research Agent API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()
+    yield
+    shutdown_scheduler()
+
+
+app = FastAPI(title="Research Agent API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,6 +32,7 @@ app.add_middleware(
 
 app.include_router(ai_router)
 app.include_router(google_auth_router)
+app.include_router(agents_router)
 
 
 @app.get("/health")
@@ -56,6 +69,8 @@ def health() -> dict[str, str | bool]:
         "gmail_working": gmail_ok,
         "google_drive_connected": has_stored_credentials(),
         "google_drive_working": drive_ok,
+        "email_recap_enabled": settings.email_recap_enabled,
+        "email_recap_scheduler_running": scheduler_running(),
     }
 
 
