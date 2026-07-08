@@ -20,6 +20,9 @@ export function ConversationPage() {
   const [googleRefreshKey, setGoogleRefreshKey] = useState(0);
   const [googleOauthReturn, setGoogleOauthReturn] = useState<"connected" | "error" | null>(null);
   const [googleOauthError, setGoogleOauthError] = useState<string | null>(null);
+  const [microsoftRefreshKey, setMicrosoftRefreshKey] = useState(0);
+  const [microsoftOauthReturn, setMicrosoftOauthReturn] = useState<"connected" | "error" | null>(null);
+  const [microsoftOauthError, setMicrosoftOauthError] = useState<string | null>(null);
   const [personalView, setPersonalView] = useState<PersonalSubView>("chat");
   const [emailAgentCount, setEmailAgentCount] = useState(0);
   const pageConfig = getPageConfig(activePage);
@@ -70,6 +73,31 @@ export function ConversationPage() {
     setActivePage("personal");
 
     params.delete("google_calendar");
+    params.delete("message");
+    const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
+    window.history.replaceState({}, "", next);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const microsoftStatus = params.get("microsoft");
+    if (!microsoftStatus) return;
+
+    if (microsoftStatus === "connected") {
+      setMicrosoftOauthReturn("connected");
+      setMicrosoftRefreshKey((value) => value + 1);
+    } else if (microsoftStatus === "error") {
+      const message =
+        params.get("message")?.replace(/\+/g, " ") ||
+        "Microsoft sign-in failed. Try again.";
+      setMicrosoftOauthReturn("error");
+      setMicrosoftOauthError(decodeURIComponent(message));
+    }
+
+    setActivePage("personal");
+    setPersonalView("email-agent");
+
+    params.delete("microsoft");
     params.delete("message");
     const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
     window.history.replaceState({}, "", next);
@@ -164,6 +192,9 @@ export function ConversationPage() {
             googleRefreshKey={googleRefreshKey}
             googleOauthReturn={googleOauthReturn}
             googleOauthError={googleOauthError}
+            microsoftRefreshKey={microsoftRefreshKey}
+            microsoftOauthReturn={microsoftOauthReturn}
+            microsoftOauthError={microsoftOauthError}
             onQueueCountChange={setEmailAgentCount}
           />
         ) : (

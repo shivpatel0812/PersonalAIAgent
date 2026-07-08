@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 
-from app.db.google_accounts import list_accounts
+from app.db.google_accounts import list_accounts as list_google_accounts
+from app.db.microsoft_accounts import list_accounts as list_microsoft_accounts
 from app.google.oauth import _run_async
 
 # Set True when you want outbound email (recap + agent send_email) to work again.
@@ -30,8 +31,11 @@ def _parse_recipient_list(recipients: str) -> list[str]:
 
 
 def get_connected_account_emails() -> list[str]:
-    accounts = _run_async(list_accounts())
-    return [account.email.lower() for account in accounts]
+    google_accounts = _run_async(list_google_accounts())
+    microsoft_accounts = _run_async(list_microsoft_accounts())
+    emails = [account.email.lower() for account in google_accounts]
+    emails.extend(account.email.lower() for account in microsoft_accounts)
+    return emails
 
 
 def validate_outbound_email(
@@ -62,7 +66,7 @@ def validate_outbound_email(
     if allowed_extra_recipients:
         allowed |= {_normalize_email(email) for email in allowed_extra_recipients}
     if not allowed:
-        return False, "No connected Google accounts found."
+        return False, "No connected mail accounts found."
 
     blocked = [r for r in recipients if r not in allowed]
     if blocked:

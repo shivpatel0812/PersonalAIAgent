@@ -3,25 +3,33 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from googleapiclient.discovery import build
 
 from app.agents.email_agent import settings as agent_settings
-from app.agents.email_agent.attachments import attachments_to_api, enrich_conversation_attachments
+from app.agents.email_agent.attachments import attachments_to_api
 from app.agents.email_agent.detector import (
     get_message_thread_id,
     is_likely_automated,
-    latest_inbound_message_id,
+    latest_inbound_message_id as gmail_latest_inbound,
     list_reply_candidates,
 )
 from app.agents.email_agent.drafter import classify_needs_reply, generate_initial_draft, revise_draft
-from app.agents.email_agent.gmail import send_thread_reply, thread_participant_emails
+from app.agents.email_agent.mail_context import (
+    MailSession,
+    enrich_item_attachments,
+    fetch_item_conversation,
+    fetch_sender_history,
+    load_mail_session,
+    send_item_reply,
+    thread_participants,
+)
 from app.agents.email_agent.scheduling import (
     build_calendar_availability_block,
     detect_scheduling,
 )
-from app.agents.email_agent.sender_history import fetch_sender_history_block
 from app.agents.email_agent.sender_intelligence import (
     candidate_sort_key,
     format_sender_context_block,
@@ -45,10 +53,33 @@ from app.db.email_agent import (
     list_items_by_status,
     update_item,
 )
-from app.db.google_accounts import list_accounts
+from app.db.google_accounts import get_account as get_google_account
+from app.db.google_accounts import list_accounts as list_google_accounts
+from app.db.microsoft_accounts import get_account as get_microsoft_account
+from app.db.microsoft_accounts import list_accounts as list_microsoft_accounts
 from app.google.oauth import get_granted_services, load_credentials
+from app.microsoft.graph_mail import (
+    fetch_thread_conversation as outlook_fetch_thread,
+)
+from app.microsoft.graph_mail import (
+    latest_inbound_message_id as outlook_latest_inbound,
+)
+from app.microsoft.graph_mail import (
+    list_unread_inbox_candidates,
+)
+from app.microsoft.oauth import get_access_token
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ScanCandidate:
+    message_id: str
+    thread_id: str
+    subject: str
+    from_email: str
+    from_name: str | None
+    snippet: str
 
 
 def _reply_subject(subject: str) -> str:
@@ -58,8 +89,16 @@ def _reply_subject(subject: str) -> str:
     return f"Re: {subject}"
 
 
-async def _sort_candidates_by_sender_priority(candidates: list) -> list:
-    enriched: list[tuple] = []
+async def _get_account_email(item: EmailAgentItem) -> str:
+    if item.mail_provider == "microsoft":
+        account = await get_microsoft_account(item.microsoft_account_id)
+    else:
+        account = await get_google_account(item.google_account_id)
+    return account.email if account else ""
+
+
+async def _sort_candidates_by_sender_priority(candidates: list[ScanCandidate]) -> list[ScanCandidate]:
+    enriched: list[tuple[ScanCandidate, object]] = []
     for candidate in candidates:
         context = await get_sender_context(candidate.from_email)
         enriched.append((candidate, context))
@@ -71,8 +110,7 @@ async def _build_draft_prompt_context(
     *,
     item: EmailAgentItem,
     conversation,
-    credentials,
-    account,
+    session: MailSession,
 ) -> tuple[str, str, str, dict]:
     profile_block = await get_profile_block_with_defaults(item.user_id)
 
@@ -84,18 +122,21 @@ async def _build_draft_prompt_context(
     profile = await get_profile(item.user_id)
     timezone = profile.timezone if profile else "America/Los_Angeles"
 
-    granted = get_granted_services(item.google_account_id)
     scheduling = detect_scheduling(
         subject=item.subject or conversation.subject,
         conversation=conversation,
         reply_to_message_id=item.gmail_message_id,
     )
-    scheduling = build_calendar_availability_block(
-        credentials,
-        scheduling,
-        granted_scopes=granted,
-        timezone=timezone,
-    )
+
+    if session.provider == "google":
+        credentials = load_credentials(item.google_account_id)
+        granted = get_granted_services(item.google_account_id)
+        scheduling = build_calendar_availability_block(
+            credentials,
+            scheduling,
+            granted_scopes=granted,
+            timezone=timezone,
+        )
 
     calendar_block = scheduling.availability_block if scheduling.is_scheduling else ""
     draft_meta = {
@@ -110,6 +151,79 @@ async def _build_draft_prompt_context(
 async def _discard_failed_item(item_id: str, reason: str) -> None:
     logger.warning("Discarding email agent item %s: %s", item_id, reason)
     await update_item(item_id, status="discarded")
+
+
+async def _queue_candidate(
+    *,
+    mail_provider: str,
+    account_id: str,
+    candidate: ScanCandidate,
+    account_email: str,
+    conversation,
+) -> tuple[int, int]:
+    """Queue one candidate and draft it. Returns (queued, drafted) counts."""
+    needs_reply, summary = classify_needs_reply(
+        account_email=account_email,
+        subject=candidate.subject,
+        from_email=candidate.from_email,
+        snippet=candidate.snippet,
+        conversation=conversation,
+        reply_to_message_id=candidate.message_id,
+    )
+    if not needs_reply:
+        return 0, 0
+
+    create_kwargs: dict = {
+        "mail_provider": mail_provider,
+        "gmail_thread_id": candidate.thread_id,
+        "gmail_message_id": candidate.message_id,
+        "sender_name": candidate.from_name,
+        "sender_email": candidate.from_email,
+        "subject": candidate.subject,
+        "summary": summary or candidate.snippet,
+        "status": "needs_draft",
+    }
+    if mail_provider == "microsoft":
+        create_kwargs["microsoft_account_id"] = account_id
+    else:
+        create_kwargs["google_account_id"] = account_id
+
+    item = await create_item(**create_kwargs)
+
+    try:
+        await draft_item(item.id)
+        return 1, 1
+    except Exception as exc:
+        logger.exception("Failed to draft item %s: %s", item.id, exc)
+        await _discard_failed_item(item.id, str(exc))
+        return 1, 0
+
+
+async def _process_scan_candidate(
+    candidate: ScanCandidate,
+    *,
+    account_email: str,
+) -> tuple[bool, str | None]:
+    """Returns (should_continue_scanning, skip_reason_if_any)."""
+    if await count_active_items() >= agent_settings.MAX_ACTIVE_QUEUE_SIZE:
+        return False, None
+
+    if await get_item_by_message_id(candidate.message_id):
+        return True, None
+
+    should_skip, skip_reason = is_likely_automated(
+        from_email=candidate.from_email,
+        subject=candidate.subject,
+        snippet=candidate.snippet,
+    )
+    if should_skip:
+        return True, skip_reason
+
+    sender_context = await get_sender_context(candidate.from_email)
+    if should_auto_archive(sender_context):
+        return True, "auto-archive sender"
+
+    return True, None
 
 
 async def recover_stuck_drafts() -> dict:
@@ -160,9 +274,10 @@ async def scan_for_reply_candidates() -> dict:
     if not ai_settings.openai_configured:
         return {"status": "skipped", "reason": "OpenAI not configured"}
 
-    accounts = await list_accounts()
-    if not accounts:
-        return {"status": "skipped", "reason": "no Google accounts connected"}
+    google_accounts = await list_google_accounts()
+    microsoft_accounts = await list_microsoft_accounts()
+    if not google_accounts and not microsoft_accounts:
+        return {"status": "skipped", "reason": "no mail accounts connected"}
 
     active_count = await count_active_items()
     if active_count >= agent_settings.MAX_ACTIVE_QUEUE_SIZE:
@@ -180,90 +295,127 @@ async def scan_for_reply_candidates() -> dict:
     drafted = 0
     skipped_automated = 0
 
-    for account in accounts:
+    for account in google_accounts:
         credentials = load_credentials(account.id)
         if not credentials:
             continue
 
-        candidates = list_reply_candidates(
+        gmail_candidates = list_reply_candidates(
             credentials,
             account_email=account.email,
         )
-        candidates = await _sort_candidates_by_sender_priority(candidates)
+        scan_candidates = [
+            ScanCandidate(
+                message_id=c.message_id,
+                thread_id="",
+                subject=c.subject,
+                from_email=c.from_email,
+                from_name=c.from_name,
+                snippet=c.snippet,
+            )
+            for c in gmail_candidates
+        ]
+        scan_candidates = await _sort_candidates_by_sender_priority(scan_candidates)
 
-        for candidate in candidates:
+        for candidate in scan_candidates:
             if await count_active_items() >= agent_settings.MAX_ACTIVE_QUEUE_SIZE:
                 break
 
             scanned += 1
-
-            if await get_item_by_message_id(candidate.message_id):
-                continue
-
-            should_skip, skip_reason = is_likely_automated(
-                from_email=candidate.from_email,
-                subject=candidate.subject,
-                snippet=candidate.snippet,
+            should_continue, skip_reason = await _process_scan_candidate(
+                candidate,
+                account_email=account.email,
             )
-            if should_skip:
+            if not should_continue:
+                break
+            if skip_reason:
                 skipped_automated += 1
                 logger.info(
-                    "Skipping automated email %s: %s",
+                    "Skipping email %s: %s",
                     candidate.message_id,
                     skip_reason,
-                )
-                continue
-
-            sender_context = await get_sender_context(candidate.from_email)
-            if should_auto_archive(sender_context):
-                skipped_automated += 1
-                logger.info(
-                    "Skipping auto-archive sender %s for message %s",
-                    candidate.from_email,
-                    candidate.message_id,
                 )
                 continue
 
             thread_id = get_message_thread_id(credentials, candidate.message_id)
             if not thread_id:
                 continue
+            candidate.thread_id = thread_id
 
-            inbound_id = latest_inbound_message_id(credentials, thread_id, account.email)
+            inbound_id = gmail_latest_inbound(credentials, thread_id, account.email)
             if inbound_id != candidate.message_id:
                 continue
 
             service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
             conversation = _fetch_thread_conversation(service, thread_id)
 
-            needs_reply, summary = classify_needs_reply(
+            q, d = await _queue_candidate(
+                mail_provider="google",
+                account_id=account.id,
+                candidate=candidate,
                 account_email=account.email,
-                subject=candidate.subject,
-                from_email=candidate.from_email,
-                snippet=candidate.snippet,
                 conversation=conversation,
-                reply_to_message_id=candidate.message_id,
             )
-            if not needs_reply:
+            queued += q
+            drafted += d
+
+    for account in microsoft_accounts:
+        token = get_access_token(account.id)
+        if not token:
+            continue
+
+        raw_candidates = list_unread_inbox_candidates(
+            token,
+            account_email=account.email,
+        )
+        scan_candidates = [
+            ScanCandidate(
+                message_id=c["message_id"],
+                thread_id=c["thread_id"],
+                subject=c["subject"],
+                from_email=c["from_email"],
+                from_name=c.get("from_name"),
+                snippet=c["snippet"],
+            )
+            for c in raw_candidates
+        ]
+        scan_candidates = await _sort_candidates_by_sender_priority(scan_candidates)
+
+        for candidate in scan_candidates:
+            if await count_active_items() >= agent_settings.MAX_ACTIVE_QUEUE_SIZE:
+                break
+
+            scanned += 1
+            should_continue, skip_reason = await _process_scan_candidate(
+                candidate,
+                account_email=account.email,
+            )
+            if not should_continue:
+                break
+            if skip_reason:
+                skipped_automated += 1
+                logger.info(
+                    "Skipping email %s: %s",
+                    candidate.message_id,
+                    skip_reason,
+                )
                 continue
 
-            item = await create_item(
-                google_account_id=account.id,
-                gmail_thread_id=thread_id,
-                gmail_message_id=candidate.message_id,
-                sender_name=candidate.from_name,
-                sender_email=candidate.from_email,
-                subject=candidate.subject,
-                summary=summary or candidate.snippet,
-                status="needs_draft",
-            )
-            queued += 1
+            inbound_id = outlook_latest_inbound(token, candidate.thread_id, account.email)
+            if inbound_id != candidate.message_id:
+                continue
 
-            try:
-                await draft_item(item.id)
-                drafted += 1
-            except Exception as exc:
-                logger.exception("Failed to draft item %s: %s", item.id, exc)
-                await _discard_failed_item(item.id, str(exc))
+            conversation = outlook_fetch_thread(token, candidate.thread_id)
+
+            q, d = await _queue_candidate(
+                mail_provider="microsoft",
+                account_id=account.id,
+                candidate=candidate,
+                account_email=account.email,
+                conversation=conversation,
+            )
+            queued += q
+            drafted += d
 
     return {
         "status": "ok",
@@ -282,32 +434,24 @@ async def draft_item(item_id: str) -> EmailAgentItem:
     if not item:
         raise ValueError("Item not found")
 
-    credentials = load_credentials(item.google_account_id)
-    if not credentials:
-        raise ValueError("Could not load Gmail credentials")
+    session = load_mail_session(item)
+    conversation = fetch_item_conversation(item, session)
+    enrich_item_attachments(session, conversation)
 
-    service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
-    conversation = _fetch_thread_conversation(service, item.gmail_thread_id)
-    enrich_conversation_attachments(service, conversation)
+    account_email = await _get_account_email(item)
 
-    from app.db.google_accounts import get_account
-
-    account = await get_account(item.google_account_id)
-    account_email = account.email if account else ""
-
-    sender_history = fetch_sender_history_block(
-        service,
-        sender_email=item.sender_email,
-        exclude_thread_id=item.gmail_thread_id,
-        current_subject=item.subject or conversation.subject,
+    sender_history = fetch_sender_history(
+        item,
+        session,
+        account_email=account_email,
+        subject=item.subject or conversation.subject,
     )
 
     profile_block, sender_context_block, calendar_block, draft_meta = (
         await _build_draft_prompt_context(
             item=item,
             conversation=conversation,
-            credentials=credentials,
-            account=account,
+            session=session,
         )
     )
 
@@ -356,32 +500,24 @@ async def adjust_item_draft(item_id: str, message: str) -> dict:
     if item.status not in ACTIVE_STATUSES:
         raise ValueError("Item is no longer active")
 
-    credentials = load_credentials(item.google_account_id)
-    if not credentials:
-        raise ValueError("Could not load Gmail credentials")
+    session = load_mail_session(item)
+    conversation = fetch_item_conversation(item, session)
+    enrich_item_attachments(session, conversation)
 
-    service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
-    conversation = _fetch_thread_conversation(service, item.gmail_thread_id)
-    enrich_conversation_attachments(service, conversation)
+    account_email = await _get_account_email(item)
 
-    from app.db.google_accounts import get_account
-
-    account = await get_account(item.google_account_id)
-    account_email = account.email if account else ""
-
-    sender_history = fetch_sender_history_block(
-        service,
-        sender_email=item.sender_email,
-        exclude_thread_id=item.gmail_thread_id,
-        current_subject=item.subject or conversation.subject,
+    sender_history = fetch_sender_history(
+        item,
+        session,
+        account_email=account_email,
+        subject=item.subject or conversation.subject,
     )
 
     profile_block, sender_context_block, calendar_block, draft_meta = (
         await _build_draft_prompt_context(
             item=item,
             conversation=conversation,
-            credentials=credentials,
-            account=account,
+            session=session,
         )
     )
 
@@ -431,24 +567,20 @@ async def approve_and_send_item(item_id: str, draft_response: str) -> dict:
     if item.status == "discarded":
         raise ValueError("Item was discarded")
 
-    credentials = load_credentials(item.google_account_id)
-    if not credentials:
-        raise ValueError("Could not load Gmail credentials")
-
-    participants = thread_participant_emails(item.gmail_thread_id, credentials)
+    session = load_mail_session(item)
+    participants = thread_participants(item, session)
     body = draft_response.strip()
     if not body:
         raise ValueError("Draft is empty")
 
     await update_item(item_id, draft_response=body, status="approved")
 
-    sent = send_thread_reply(
-        credentials,
+    sent = send_item_reply(
+        item,
+        session,
         to=item.sender_email,
         subject=_reply_subject(item.subject or ""),
         body=body,
-        thread_id=item.gmail_thread_id,
-        reply_to_email_id=item.gmail_message_id,
         allowed_recipients=participants,
     )
 
@@ -500,23 +632,16 @@ async def discard_item(item_id: str) -> EmailAgentItem:
 
 
 async def get_item_thread(item_id: str) -> dict:
-    """Load the full Gmail thread for a queue item."""
+    """Load the full mail thread for a queue item."""
     item = await get_item(item_id)
     if not item:
         raise ValueError("Item not found")
 
-    credentials = load_credentials(item.google_account_id)
-    if not credentials:
-        raise ValueError("Could not load Gmail credentials")
+    session = load_mail_session(item)
+    conversation = fetch_item_conversation(item, session)
+    enrich_item_attachments(session, conversation)
 
-    from app.db.google_accounts import get_account
-
-    account = await get_account(item.google_account_id)
-    account_email = (account.email if account else "").lower()
-
-    service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
-    conversation = _fetch_thread_conversation(service, item.gmail_thread_id)
-    enrich_conversation_attachments(service, conversation)
+    account_email = (await _get_account_email(item)).lower()
 
     messages = []
     for message in conversation.messages:

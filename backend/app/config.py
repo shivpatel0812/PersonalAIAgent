@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8001/auth/google/callback"
+    microsoft_client_id: str = ""
+    microsoft_client_secret: str = ""
+    microsoft_tenant_id: str = "common"
+    microsoft_redirect_uri: str = "http://localhost:8001/auth/microsoft/callback"
     frontend_url: str = "http://localhost:5174"
     backend_url: str = "http://localhost:8001"
 
@@ -21,6 +25,10 @@ class Settings(BaseSettings):
     @property
     def google_oauth_configured(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret)
+
+    @property
+    def microsoft_oauth_configured(self) -> bool:
+        return bool(self.microsoft_client_id and self.microsoft_client_secret)
 
     @property
     def cors_origin_list(self) -> list[str]:

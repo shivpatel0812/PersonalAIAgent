@@ -24,6 +24,8 @@ class EmailAgentItem:
         self.id = row["id"]
         self.user_id = row.get("user_id", "default")
         self.google_account_id = row.get("google_account_id")
+        self.microsoft_account_id = row.get("microsoft_account_id")
+        self.mail_provider = row.get("mail_provider") or "google"
         self.gmail_thread_id = row["gmail_thread_id"]
         self.gmail_message_id = row["gmail_message_id"]
         self.sender_name = row.get("sender_name")
@@ -41,13 +43,21 @@ class EmailAgentItem:
 
     def to_api_dict(self, *, always_urgent: bool = False) -> dict[str, Any]:
         meta = self.draft_context_meta or {}
+        if self.mail_provider == "microsoft":
+            mail_url = (
+                f"https://outlook.office.com/mail/deeplink/read/{self.gmail_message_id}"
+            )
+        else:
+            mail_url = f"https://mail.google.com/mail/u/0/#inbox/{self.gmail_message_id}"
         return {
             "id": str(self.id),
             "senderName": self.sender_name or self.sender_email,
             "senderEmail": self.sender_email,
             "subject": self.subject or "(No subject)",
             "summary": self.summary or "",
-            "gmailUrl": f"https://mail.google.com/mail/u/0/#inbox/{self.gmail_message_id}",
+            "gmailUrl": mail_url,
+            "mailUrl": mail_url,
+            "mailProvider": self.mail_provider,
             "draftResponse": self.draft_response or "",
             "status": self.status,
             "alwaysUrgent": always_urgent,
@@ -129,12 +139,14 @@ async def get_item_by_message_id(gmail_message_id: str) -> EmailAgentItem | None
 
 async def create_item(
     *,
-    google_account_id: str,
     gmail_thread_id: str,
     gmail_message_id: str,
     sender_name: str | None,
     sender_email: str,
     subject: str | None,
+    mail_provider: str = "google",
+    google_account_id: str | None = None,
+    microsoft_account_id: str | None = None,
     summary: str | None = None,
     draft_response: str | None = None,
     status: EmailAgentStatus = "needs_draft",
@@ -143,7 +155,9 @@ async def create_item(
     supabase = get_supabase_client()
     payload: dict[str, Any] = {
         "user_id": user_id,
+        "mail_provider": mail_provider,
         "google_account_id": google_account_id,
+        "microsoft_account_id": microsoft_account_id,
         "gmail_thread_id": gmail_thread_id,
         "gmail_message_id": gmail_message_id,
         "sender_name": sender_name,

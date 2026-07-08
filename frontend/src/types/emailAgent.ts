@@ -7,6 +7,8 @@ export type EmailAgentItem = {
   subject: string;
   summary: string;
   gmailUrl: string;
+  mailUrl?: string;
+  mailProvider?: "google" | "microsoft";
   draftResponse: string;
   status: EmailAgentStatus;
   alwaysUrgent?: boolean;
