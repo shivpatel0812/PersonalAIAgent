@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from app.agents.email_agent import settings as agent_settings
+from app.agents.email_agent.date_utils import is_within_reply_window
 from app.ai.tools.gmail_tool import (
     AttachmentInfo,
     EmailThreadConversation,
@@ -149,6 +150,9 @@ def list_unread_inbox_candidates(
     candidates: list[dict[str, Any]] = []
     account_lower = account_email.lower()
     for item in items:
+        received = item.get("receivedDateTime") or ""
+        if not is_within_reply_window(received):
+            continue
         from_email = _email_address((item.get("from") or {}).get("emailAddress"))
         from_display = _parse_address((item.get("from") or {}).get("emailAddress"))
         from_lower = from_email

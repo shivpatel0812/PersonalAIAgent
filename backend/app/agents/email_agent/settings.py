@@ -5,11 +5,15 @@ ENABLED = True
 # How often to scan inboxes for emails needing a reply (minutes)
 SCAN_INTERVAL_MINUTES = 15
 
+# Only queue emails received within this many days
+REPLY_MAX_AGE_DAYS = 14
+
 # Gmail search query for candidate messages
 SCAN_QUERY = (
     "is:inbox is:unread -from:me "
     "-category:promotions -category:social -category:updates "
-    "-from:noreply -from:no-reply -from:notifications -from:verify"
+    "-from:noreply -from:no-reply -from:notifications -from:verify "
+    f"newer_than:{REPLY_MAX_AGE_DAYS}d"
 )
 
 MAX_CANDIDATES_PER_ACCOUNT = 15

@@ -16,6 +16,7 @@ from app.agents.email_agent.detector import (
     latest_inbound_message_id as gmail_latest_inbound,
     list_reply_candidates,
 )
+from app.agents.email_agent.date_utils import is_within_reply_window
 from app.agents.email_agent.drafter import classify_needs_reply, generate_initial_draft, revise_draft
 from app.agents.email_agent.mail_context import (
     MailSession,
@@ -80,6 +81,7 @@ class ScanCandidate:
     from_email: str
     from_name: str | None
     snippet: str
+    date: str = ""
 
 
 def _reply_subject(subject: str) -> str:
@@ -219,6 +221,9 @@ async def _process_scan_candidate(
     if should_skip:
         return True, skip_reason
 
+    if not is_within_reply_window(candidate.date):
+        return True, f"older than {agent_settings.REPLY_MAX_AGE_DAYS} days"
+
     sender_context = await get_sender_context(candidate.from_email)
     if should_auto_archive(sender_context):
         return True, "auto-archive sender"
@@ -249,6 +254,31 @@ async def recover_stuck_drafts() -> dict:
         "recovered": recovered,
         "discarded": discarded,
     }
+
+
+async def cleanup_old_queue_items() -> dict:
+    """Discard active queue items whose target email is older than the reply window."""
+    removed = 0
+    for item in await list_active_items():
+        try:
+            session = load_mail_session(item)
+            conversation = fetch_item_conversation(item, session)
+            target = next(
+                (message for message in conversation.messages if message.email_id == item.gmail_message_id),
+                None,
+            )
+            if not target:
+                continue
+            if is_within_reply_window(target.date):
+                continue
+            await _discard_failed_item(
+                item.id,
+                f"older than {agent_settings.REPLY_MAX_AGE_DAYS} days",
+            )
+            removed += 1
+        except Exception as exc:
+            logger.warning("Could not check email age for item %s: %s", item.id, exc)
+    return {"removed": removed}
 
 
 async def cleanup_bad_queue_items() -> dict:
@@ -288,6 +318,7 @@ async def scan_for_reply_candidates() -> dict:
         }
 
     cleanup_result = await cleanup_bad_queue_items()
+    old_cleanup_result = await cleanup_old_queue_items()
     recovery_result = await recover_stuck_drafts()
 
     scanned = 0
@@ -312,6 +343,7 @@ async def scan_for_reply_candidates() -> dict:
                 from_email=c.from_email,
                 from_name=c.from_name,
                 snippet=c.snippet,
+                date=c.date,
             )
             for c in gmail_candidates
         ]
@@ -376,6 +408,7 @@ async def scan_for_reply_candidates() -> dict:
                 from_email=c["from_email"],
                 from_name=c.get("from_name"),
                 snippet=c["snippet"],
+                date=c.get("date", ""),
             )
             for c in raw_candidates
         ]
@@ -424,6 +457,7 @@ async def scan_for_reply_candidates() -> dict:
         "drafted": drafted,
         "skipped_automated": skipped_automated,
         "cleanup": cleanup_result,
+        "old_cleanup": old_cleanup_result,
         "recovery": recovery_result,
     }
 
@@ -685,6 +719,7 @@ async def get_item_detail(item_id: str) -> dict:
 
 async def list_items() -> list[dict]:
     await cleanup_bad_queue_items()
+    await cleanup_old_queue_items()
     items = await list_active_items()
     result: list[dict] = []
     for item in items:
