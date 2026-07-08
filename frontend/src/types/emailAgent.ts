@@ -1,4 +1,4 @@
-export type EmailAgentStatus = "needs_draft" | "draft_ready" | "waiting_on_you";
+export type EmailAgentStatus = "needs_draft" | "draft_ready" | "waiting_on_you" | "listed";
 
 export type EmailAgentItem = {
   id: string;
@@ -11,6 +11,7 @@ export type EmailAgentItem = {
   mailProvider?: "google" | "microsoft";
   draftResponse: string;
   status: EmailAgentStatus;
+  needsResponse?: boolean;
   alwaysUrgent?: boolean;
   schedulingDetected?: boolean;
   calendarChecked?: boolean;

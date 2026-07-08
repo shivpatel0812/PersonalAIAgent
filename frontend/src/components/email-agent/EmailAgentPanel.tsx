@@ -8,6 +8,7 @@ import {
   fetchEmailAgentItem,
   fetchEmailAgentItems,
   fetchEmailAgentThread,
+  generateEmailDraft,
   scanEmailAgentInbox,
 } from "../../lib/api/emailAgent";
 import {
@@ -26,7 +27,49 @@ const STATUS_LABELS = {
   needs_draft: "Drafting…",
   draft_ready: "Ready for review",
   waiting_on_you: "Needs your input",
+  listed: "Browse",
 } as const;
+
+function InboxItemButton({
+  item,
+  isActive,
+  onSelect,
+}: {
+  item: EmailAgentItem;
+  isActive: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(item.id)}
+      className={`w-full rounded-lg px-3 py-3 text-left transition ${
+        isActive
+          ? "border border-slate-700 bg-slate-900"
+          : "border border-transparent hover:bg-slate-900/50"
+      }`}
+    >
+      <p className="truncate text-sm font-medium text-slate-100">
+        {item.senderName}
+        {item.alwaysUrgent && (
+          <span
+            className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-400"
+            title="Always urgent sender"
+          />
+        )}
+      </p>
+      <p className="mt-1 truncate text-xs text-slate-500">{item.subject}</p>
+      <p className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
+        <span>{STATUS_LABELS[item.status]}</span>
+        {item.mailProvider === "microsoft" && (
+          <span className="rounded border border-sky-500/20 px-1 py-0.5 text-[9px] uppercase text-sky-400">
+            Outlook
+          </span>
+        )}
+      </p>
+    </button>
+  );
+}
 
 type EmailAgentPanelProps = {
   googleRefreshKey?: number;
@@ -55,6 +98,8 @@ export function EmailAgentPanel({
   const [adjusting, setAdjusting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [generatingDraft, setGeneratingDraft] = useState(false);
+  const [hasAutoScanned, setHasAutoScanned] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedIncoming, setExpandedIncoming] = useState<Record<string, boolean>>({});
@@ -77,10 +122,23 @@ export function EmailAgentPanel({
     setExpandedPdfPreview((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  const selected = useMemo(
-    () => items.find((item) => item.id === selectedId) ?? items[0],
-    [items, selectedId]
+  const priorityItems = useMemo(
+    () => items.filter((item) => item.needsResponse !== false && item.status !== "listed"),
+    [items]
   );
+  const browseItems = useMemo(
+    () => items.filter((item) => item.status === "listed" || item.needsResponse === false),
+    [items]
+  );
+
+  const selected = useMemo(() => {
+    if (selectedId) {
+      return items.find((item) => item.id === selectedId) ?? priorityItems[0] ?? browseItems[0];
+    }
+    return priorityItems[0] ?? browseItems[0];
+  }, [items, selectedId, priorityItems, browseItems]);
+
+  const selectedHasDraft = selected ? selected.status !== "listed" : false;
 
   const chatMessages = selected ? chatByEmail[selected.id] ?? [] : [];
 
@@ -99,12 +157,18 @@ export function EmailAgentPanel({
     try {
       const queue = await fetchEmailAgentItems();
       setItems(queue);
-      onQueueCountChange?.(queue.length);
+      const priorityCount = queue.filter(
+        (item) => item.needsResponse !== false && item.status !== "listed"
+      ).length;
+      onQueueCountChange?.(priorityCount);
       if (queue.length > 0) {
-        const firstId = queue[0].id;
+        const firstPriority = queue.find(
+          (item) => item.needsResponse !== false && item.status !== "listed"
+        );
+        const firstId = firstPriority?.id ?? queue[0].id;
         setSelectedId((current) => current || firstId);
         setDrafts(Object.fromEntries(queue.map((item) => [item.id, item.draftResponse])));
-        await loadItemDetail(queue[0].id);
+        await loadItemDetail(firstId);
       } else {
         setSelectedId("");
       }
@@ -118,6 +182,12 @@ export function EmailAgentPanel({
   useEffect(() => {
     void loadQueue();
   }, [loadQueue]);
+
+  useEffect(() => {
+    if (loading || scanning || hasAutoScanned || items.length > 0) return;
+    setHasAutoScanned(true);
+    void handleScan();
+  }, [loading, scanning, hasAutoScanned, items.length]);
 
   useEffect(() => {
     void fetchUserEmailProfile()
@@ -183,6 +253,24 @@ export function EmailAgentPanel({
     }
   }
 
+  async function handleGenerateDraft() {
+    if (!selected) return;
+
+    setGeneratingDraft(true);
+    setError(null);
+    try {
+      const result = await generateEmailDraft(selected.id);
+      setItems((prev) =>
+        prev.map((item) => (item.id === selected.id ? { ...item, ...result.item } : item))
+      );
+      await loadItemDetail(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate draft");
+    } finally {
+      setGeneratingDraft(false);
+    }
+  }
+
   async function handleScan() {
     setScanning(true);
     setError(null);
@@ -237,7 +325,9 @@ export function EmailAgentPanel({
       await approveEmailDraft(selected.id, drafts[selected.id] ?? selected.draftResponse);
       const remaining = items.filter((item) => item.id !== selected.id);
       setItems(remaining);
-      onQueueCountChange?.(remaining.length);
+      onQueueCountChange?.(
+        remaining.filter((item) => item.needsResponse !== false && item.status !== "listed").length
+      );
       setSelectedId(remaining[0]?.id ?? "");
       if (remaining[0]) {
         await loadItemDetail(remaining[0].id);
@@ -257,7 +347,9 @@ export function EmailAgentPanel({
       await discardEmailItem(selected.id);
       const remaining = items.filter((item) => item.id !== selected.id);
       setItems(remaining);
-      onQueueCountChange?.(remaining.length);
+      onQueueCountChange?.(
+        remaining.filter((item) => item.needsResponse !== false && item.status !== "listed").length
+      );
       setSelectedId(remaining[0]?.id ?? "");
       if (remaining[0]) {
         await loadItemDetail(remaining[0].id);
@@ -379,7 +471,11 @@ export function EmailAgentPanel({
         </div>
       ) : items.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-sm text-slate-400">No emails need a response right now.</p>
+          <p className="text-sm text-slate-400">
+            {scanning
+              ? "Scanning your inbox for recent emails…"
+              : "No recent emails found. Try scanning again."}
+          </p>
           <button
             type="button"
             onClick={() => void handleScan()}
@@ -406,38 +502,41 @@ export function EmailAgentPanel({
                 {scanning ? "…" : "↻"}
               </button>
             </div>
-            <div className="space-y-1 px-2 pb-4">
-              {items.map((item) => {
-                const isActive = item.id === selected?.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => void handleSelectItem(item.id)}
-                    className={`w-full rounded-lg px-3 py-3 text-left transition ${
-                      isActive
-                        ? "border border-slate-700 bg-slate-900"
-                        : "border border-transparent hover:bg-slate-900/50"
-                    }`}
-                  >
-                    <p className="truncate text-sm font-medium text-slate-100">
-                      {item.senderName}
-                      {item.alwaysUrgent && (
-                        <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-400" title="Always urgent sender" />
-                      )}
-                    </p>
-                    <p className="mt-1 truncate text-xs text-slate-500">{item.subject}</p>
-                    <p className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
-                      <span>{STATUS_LABELS[item.status]}</span>
-                      {item.mailProvider === "microsoft" && (
-                        <span className="rounded border border-sky-500/20 px-1 py-0.5 text-[9px] uppercase text-sky-400">
-                          Outlook
-                        </span>
-                      )}
-                    </p>
-                  </button>
-                );
-              })}
+            <div className="space-y-3 px-2 pb-4">
+              {priorityItems.length > 0 && (
+                <div>
+                  <p className="px-2 pb-2 text-[10px] font-medium uppercase tracking-wider text-amber-500/80">
+                    Needs response
+                  </p>
+                  <div className="space-y-1">
+                    {priorityItems.map((item) => (
+                      <InboxItemButton
+                        key={item.id}
+                        item={item}
+                        isActive={item.id === selected?.id}
+                        onSelect={(id) => void handleSelectItem(id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {browseItems.length > 0 && (
+                <div>
+                  <p className="px-2 pb-2 text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                    Other recent emails
+                  </p>
+                  <div className="space-y-1">
+                    {browseItems.map((item) => (
+                      <InboxItemButton
+                        key={item.id}
+                        item={item}
+                        isActive={item.id === selected?.id}
+                        onSelect={(id) => void handleSelectItem(id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </aside>
 
@@ -581,7 +680,7 @@ export function EmailAgentPanel({
                   <p className="mb-2 mt-8 text-[11px] font-medium uppercase tracking-wider text-slate-500">
                     Draft response
                   </p>
-                  {selected.schedulingDetected && (
+                  {selected.schedulingDetected && selectedHasDraft && (
                     <p className="mb-2 text-xs text-slate-500">
                       {selected.calendarChecked
                         ? "Calendar checked for scheduling"
@@ -590,28 +689,55 @@ export function EmailAgentPanel({
                           : "Scheduling detected"}
                     </p>
                   )}
-                  <textarea
-                    value={drafts[selected.id] ?? ""}
-                    onChange={(event) =>
-                      setDrafts((prev) => ({
-                        ...prev,
-                        [selected.id]: event.target.value,
-                      }))
-                    }
-                    rows={12}
-                    className="w-full resize-none rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-200 outline-none focus:border-slate-700"
-                  />
+                  {selectedHasDraft ? (
+                    <textarea
+                      value={drafts[selected.id] ?? ""}
+                      onChange={(event) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [selected.id]: event.target.value,
+                        }))
+                      }
+                      rows={12}
+                      className="w-full resize-none rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-200 outline-none focus:border-slate-700"
+                    />
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/40 px-4 py-8 text-center">
+                      <p className="text-sm text-slate-400">
+                        No draft yet. Generate one when you want to reply to this email.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void handleGenerateDraft()}
+                        disabled={generatingDraft}
+                        className="mt-4 rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 disabled:opacity-50"
+                      >
+                        {generatingDraft ? "Generating draft…" : "Generate draft"}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="border-t border-slate-800 px-6 py-4">
-                  <button
-                    type="button"
-                    onClick={() => void handleApprove()}
-                    disabled={sending}
-                    className="w-full rounded-xl bg-emerald-500 py-3.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {sending ? "Sending…" : "Approve & send"}
-                  </button>
+                  {selectedHasDraft ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleApprove()}
+                      disabled={sending}
+                      className="w-full rounded-xl bg-emerald-500 py-3.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {sending ? "Sending…" : "Approve & send"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateDraft()}
+                      disabled={generatingDraft}
+                      className="w-full rounded-xl bg-slate-200 py-3.5 text-sm font-semibold text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {generatingDraft ? "Generating draft…" : "Generate draft"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => void handleDiscard()}
@@ -625,12 +751,18 @@ export function EmailAgentPanel({
               {/* Adjust draft */}
               <div className="flex w-80 shrink-0 flex-col bg-slate-950/30 xl:w-96">
                 <p className="border-b border-slate-800 px-4 py-3 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                  Adjust draft
+                  {selectedHasDraft ? "Adjust draft" : "About this email"}
                 </p>
 
                 <div className="flex flex-1 flex-col overflow-hidden">
                   <div className="flex-1 space-y-3 overflow-y-auto p-4">
-                    {chatMessages.length === 0 && (
+                    {!selectedHasDraft && (
+                      <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-400">
+                        This email is in your recent inbox browse list. Generate a draft when
+                        you want help replying — nothing sends until you approve.
+                      </div>
+                    )}
+                    {selectedHasDraft && chatMessages.length === 0 && (
                       <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-400">
                         I&apos;ve drafted a reply based on the email thread. Tell me what to
                         change — tone, length, or details to add — and I&apos;ll update the
@@ -660,24 +792,26 @@ export function EmailAgentPanel({
                     )}
                   </div>
 
-                  <div className="border-t border-slate-800 p-4">
-                    <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2">
-                      <textarea
-                        value={chatInput}
-                        onChange={(event) => setChatInput(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" && !event.shiftKey && !adjusting) {
-                            event.preventDefault();
-                            void handleAdjustDraft();
-                          }
-                        }}
-                        placeholder="e.g. Make it shorter, mention Friday works…"
-                        rows={3}
-                        disabled={adjusting}
-                        className="w-full resize-none bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
-                      />
+                  {selectedHasDraft && (
+                    <div className="border-t border-slate-800 p-4">
+                      <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2">
+                        <textarea
+                          value={chatInput}
+                          onChange={(event) => setChatInput(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" && !event.shiftKey && !adjusting) {
+                              event.preventDefault();
+                              void handleAdjustDraft();
+                            }
+                          }}
+                          placeholder="e.g. Make it shorter, mention Friday works…"
+                          rows={3}
+                          disabled={adjusting}
+                          className="w-full resize-none bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </>

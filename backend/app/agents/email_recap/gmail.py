@@ -19,6 +19,7 @@ class RecapEmail(BaseModel):
     account_email: str
     id: str
     message_id: str  # Gmail message ID
+    thread_id: str  # Gmail thread ID for deduplication
     subject: str
     from_email: str
     from_name: str | None = None  # Extracted sender name
@@ -26,6 +27,7 @@ class RecapEmail(BaseModel):
     snippet: str
     is_unread: bool
     is_important: bool
+    has_attachments: bool = False  # Whether email has attachments
 
 
 def list_recap_candidates(
@@ -74,11 +76,21 @@ def list_recap_candidates(
             # Just an email address
             from_email = from_header.strip()
 
+        # Check for attachments
+        has_attachments = False
+        payload = message.get("payload", {})
+        if "parts" in payload:
+            for part in payload.get("parts", []):
+                if part.get("filename"):
+                    has_attachments = True
+                    break
+
         emails.append(
             RecapEmail(
                 account_email=account_email,
                 id=message["id"],
                 message_id=message["id"],
+                thread_id=message.get("threadId", message["id"]),
                 subject=headers.get("Subject", "(No subject)"),
                 from_email=from_email,
                 from_name=from_name,
@@ -86,6 +98,7 @@ def list_recap_candidates(
                 snippet=message.get("snippet", ""),
                 is_unread="UNREAD" in labels,
                 is_important="IMPORTANT" in labels,
+                has_attachments=has_attachments,
             )
         )
 

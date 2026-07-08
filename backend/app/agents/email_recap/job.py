@@ -82,11 +82,12 @@ async def run_email_recap(slot: RecapSlot = "morning") -> dict:
 
     account_emails = [a.email for a in accounts]
 
-    # Generate intelligent HTML recap
-    recap_html = generate_intelligent_recap_html(
+    # Generate intelligent HTML recap with all improvements
+    recap_html = await generate_intelligent_recap_html(
         slot=slot,
         emails=all_emails,
         account_emails=account_emails,
+        user_id="default",  # TODO: Get actual user_id from account
     )
 
     tz = pytz.timezone(recap_settings.TIMEZONE)

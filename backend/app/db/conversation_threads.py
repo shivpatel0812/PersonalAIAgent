@@ -16,7 +16,8 @@ DEFAULT_THREAD_TITLE = "New chat"
 PAGE_CONTEXT = {
     "stocks": (
         "You are on the Stock Research page. Help with portfolio analysis, "
-        "market news, company research, and investment decisions."
+        "market news, company research, and investment decisions. "
+        "If Robinhood MCP is connected, use robinhood_* tools for live portfolio data and quotes."
     ),
     "personal": (
         "You are on the Personal Assistant page. Help with personal planning, "

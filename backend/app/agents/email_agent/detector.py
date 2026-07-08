@@ -34,10 +34,41 @@ def list_reply_candidates(
     max_results: int | None = None,
 ) -> list[RecapEmail]:
     """Unread inbox messages that might need a reply."""
+    return _list_candidates(
+        credentials,
+        account_email=account_email,
+        query=agent_settings.SCAN_QUERY,
+        max_results=max_results,
+    )
+
+
+def list_browse_candidates(
+    credentials,
+    *,
+    account_email: str,
+    max_results: int | None = None,
+) -> list[RecapEmail]:
+    """Recent inbox messages for the browse tier (read + unread)."""
+    return _list_candidates(
+        credentials,
+        account_email=account_email,
+        query=agent_settings.BROWSE_SCAN_QUERY,
+        max_results=max_results,
+    )
+
+
+def _list_candidates(
+    credentials,
+    *,
+    account_email: str,
+    query: str,
+    max_results: int | None = None,
+) -> list[RecapEmail]:
+    """Inbox messages matching a Gmail search query."""
     service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
     results = service.users().messages().list(
         userId="me",
-        q=agent_settings.SCAN_QUERY,
+        q=query,
         maxResults=max_results or agent_settings.MAX_CANDIDATES_PER_ACCOUNT,
     ).execute()
 

@@ -11,12 +11,14 @@ EmailAgentStatus = Literal[
     "needs_draft",
     "draft_ready",
     "waiting_on_you",
+    "listed",
     "approved",
     "sent",
     "discarded",
 ]
 
-ACTIVE_STATUSES = ("needs_draft", "draft_ready", "waiting_on_you")
+PRIORITY_STATUSES = ("needs_draft", "draft_ready", "waiting_on_you")
+ACTIVE_STATUSES = PRIORITY_STATUSES + ("listed",)
 
 
 class EmailAgentItem:
@@ -60,6 +62,7 @@ class EmailAgentItem:
             "mailProvider": self.mail_provider,
             "draftResponse": self.draft_response or "",
             "status": self.status,
+            "needsResponse": self.status in PRIORITY_STATUSES,
             "alwaysUrgent": always_urgent,
             "schedulingDetected": bool(meta.get("schedulingDetected")),
             "calendarChecked": bool(meta.get("calendarChecked")),
@@ -212,3 +215,27 @@ async def add_chat_message(
 async def count_active_items(user_id: str = "default") -> int:
     items = await list_active_items(user_id=user_id)
     return len(items)
+
+
+async def count_priority_items(user_id: str = "default") -> int:
+    supabase = get_supabase_client()
+    result = (
+        supabase.table("email_agent_items")
+        .select("id")
+        .eq("user_id", user_id)
+        .in_("status", list(PRIORITY_STATUSES))
+        .execute()
+    )
+    return len(result.data or [])
+
+
+async def count_browse_items(user_id: str = "default") -> int:
+    supabase = get_supabase_client()
+    result = (
+        supabase.table("email_agent_items")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("status", "listed")
+        .execute()
+    )
+    return len(result.data or [])

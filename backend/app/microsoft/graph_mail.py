@@ -168,6 +168,54 @@ def list_unread_inbox_candidates(
                 or from_display,
                 "snippet": item.get("bodyPreview") or "",
                 "date": item.get("receivedDateTime") or "",
+                "is_unread": not item.get("isRead", True),
+            }
+        )
+    return candidates
+
+
+def list_browse_inbox_candidates(
+    access_token: str,
+    *,
+    account_email: str,
+    max_results: int | None = None,
+) -> list[dict[str, Any]]:
+    max_results = max_results or agent_settings.MAX_CANDIDATES_PER_ACCOUNT
+    params = {
+        "$orderby": "receivedDateTime desc",
+        "$top": str(max_results),
+        "$select": "id,subject,from,toRecipients,receivedDateTime,bodyPreview,conversationId,isRead",
+    }
+    with httpx.Client(timeout=60.0) as client:
+        response = client.get(
+            f"{GRAPH_BASE}/me/mailFolders/inbox/messages",
+            headers=_graph_headers(access_token),
+            params=params,
+        )
+        response.raise_for_status()
+        items = response.json().get("value", [])
+
+    candidates: list[dict[str, Any]] = []
+    account_lower = account_email.lower()
+    for item in items:
+        received = item.get("receivedDateTime") or ""
+        if not is_within_reply_window(received):
+            continue
+        from_email = _email_address((item.get("from") or {}).get("emailAddress"))
+        from_display = _parse_address((item.get("from") or {}).get("emailAddress"))
+        if account_lower in from_email:
+            continue
+        candidates.append(
+            {
+                "message_id": item["id"],
+                "thread_id": item.get("conversationId") or item["id"],
+                "subject": item.get("subject") or "(No subject)",
+                "from_email": from_email,
+                "from_name": (item.get("from") or {}).get("emailAddress", {}).get("name")
+                or from_display,
+                "snippet": item.get("bodyPreview") or "",
+                "date": item.get("receivedDateTime") or "",
+                "is_unread": not item.get("isRead", True),
             }
         )
     return candidates

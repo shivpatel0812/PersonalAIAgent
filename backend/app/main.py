@@ -15,6 +15,7 @@ from app.routes.google_auth import router as google_auth_router
 from app.routes.email_intelligence import router as email_intelligence_router
 from app.routes.email_agent import router as email_agent_router
 from app.routes.microsoft_auth import router as microsoft_auth_router
+from app.routes.robinhood_auth import router as robinhood_auth_router
 from app.routes.user_email_profile import router as user_email_profile_router
 from app.supabase_client import get_supabase_client
 from app.google.oauth import has_stored_credentials, test_calendar_access
@@ -43,6 +44,7 @@ app.include_router(agents_router)
 app.include_router(email_intelligence_router)
 app.include_router(email_agent_router)
 app.include_router(microsoft_auth_router)
+app.include_router(robinhood_auth_router)
 app.include_router(user_email_profile_router)
 
 

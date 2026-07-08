@@ -10,6 +10,7 @@ import { MemoryPanel } from "../components/research/MemoryPanel";
 import { ErrorBanner } from "../components/research/ErrorBanner";
 import { TweaksPanel } from "../components/tweaks/TweaksPanel";
 import { GoogleCalendarPanel } from "../components/integrations/GoogleCalendarPanel";
+import { RobinhoodPanel } from "../components/integrations/RobinhoodPanel";
 import { EmailAgentPanel } from "../components/email-agent/EmailAgentPanel";
 import { fetchEmailAgentItems } from "../lib/api/emailAgent";
 import { RESEARCH_PAGES, getPageConfig, type PageType } from "../types/conversation";
@@ -23,6 +24,9 @@ export function ConversationPage() {
   const [microsoftRefreshKey, setMicrosoftRefreshKey] = useState(0);
   const [microsoftOauthReturn, setMicrosoftOauthReturn] = useState<"connected" | "error" | null>(null);
   const [microsoftOauthError, setMicrosoftOauthError] = useState<string | null>(null);
+  const [robinhoodRefreshKey, setRobinhoodRefreshKey] = useState(0);
+  const [robinhoodOauthReturn, setRobinhoodOauthReturn] = useState<"connected" | "error" | null>(null);
+  const [robinhoodOauthError, setRobinhoodOauthError] = useState<string | null>(null);
   const [personalView, setPersonalView] = useState<PersonalSubView>("chat");
   const [emailAgentCount, setEmailAgentCount] = useState(0);
   const pageConfig = getPageConfig(activePage);
@@ -98,6 +102,34 @@ export function ConversationPage() {
     setPersonalView("email-agent");
 
     params.delete("microsoft");
+    params.delete("message");
+    const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
+    window.history.replaceState({}, "", next);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const robinhoodStatus = params.get("robinhood");
+    if (!robinhoodStatus) return;
+
+    if (robinhoodStatus === "connected") {
+      setRobinhoodOauthReturn("connected");
+      setRobinhoodRefreshKey((value) => value + 1);
+    } else if (robinhoodStatus === "error") {
+      const message =
+        params.get("message")?.replace(/\+/g, " ") ||
+        "Robinhood sign-in failed. Try again.";
+      setRobinhoodOauthReturn("error");
+      setRobinhoodOauthError(decodeURIComponent(message));
+    }
+
+    const page = params.get("page");
+    if (page === "stocks") {
+      setActivePage("stocks");
+    }
+
+    params.delete("robinhood");
+    params.delete("page");
     params.delete("message");
     const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
     window.history.replaceState({}, "", next);
@@ -211,6 +243,16 @@ export function ConversationPage() {
                   refreshKey={googleRefreshKey}
                   oauthReturn={googleOauthReturn}
                   oauthErrorMessage={googleOauthError}
+                />
+              </div>
+            )}
+
+            {activePage === "stocks" && (
+              <div className="pt-4">
+                <RobinhoodPanel
+                  refreshKey={robinhoodRefreshKey}
+                  oauthReturn={robinhoodOauthReturn}
+                  oauthErrorMessage={robinhoodOauthError}
                 />
               </div>
             )}

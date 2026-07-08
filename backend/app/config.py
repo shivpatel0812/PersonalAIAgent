@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     microsoft_client_secret: str = ""
     microsoft_tenant_id: str = "common"
     microsoft_redirect_uri: str = "http://localhost:8001/auth/microsoft/callback"
+    robinhood_mcp_url: str = "https://agent.robinhood.com/mcp/trading"
+    robinhood_redirect_uri: str = "http://localhost:8001/auth/robinhood/callback"
     frontend_url: str = "http://localhost:5174"
     backend_url: str = "http://localhost:8001"
 

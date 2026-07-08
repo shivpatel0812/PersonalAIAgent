@@ -44,6 +44,7 @@ from app.ai.tools.maps_tool import (
     SearchPlacesTool,
     GeocodeTool,
 )
+from app.ai.tools.robinhood_tool import get_robinhood_tools
 from app.ai.tools.youtube_tool import (
     SearchYouTubeTool,
     GetVideoDetailsTool,
@@ -109,6 +110,10 @@ def get_tool_registry(context_query: str | None = None) -> ToolRegistry:
     registry.register(GetDistanceTimeTool())
     registry.register(SearchPlacesTool())
     registry.register(GeocodeTool())
+
+    # Robinhood MCP tools (when connected)
+    for robinhood_tool in get_robinhood_tools():
+        registry.register(robinhood_tool)
 
     # YouTube tools (public)
     registry.register(SearchYouTubeTool())
@@ -177,6 +182,12 @@ Rules:
   - search_places: Find places, businesses, or points of interest (e.g., "coffee shops near me")
   - geocode_address: Convert addresses to coordinates (latitude/longitude)
   - Perfect for: "How long to get from X to Y?", "Find restaurants nearby", "What are the coordinates of X?"
+
+- For Robinhood Agentic Trading (Stock Research page), connect Robinhood MCP first:
+  - Tools are prefixed with robinhood_ (e.g. robinhood_get_portfolio, robinhood_get_equity_quotes)
+  - Read tools can access portfolio, positions, balances, and quotes across accounts
+  - Trade tools only execute in the dedicated Robinhood Agentic account
+  - Use review tools before placing orders when available
 
 - For YouTube, you can search videos AND access personal data:
   Public data:

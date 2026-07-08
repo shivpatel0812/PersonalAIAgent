@@ -8,7 +8,12 @@ SCAN_INTERVAL_MINUTES = 15
 # Only queue emails received within this many days
 REPLY_MAX_AGE_DAYS = 14
 
-# Gmail search query for candidate messages
+MAX_CANDIDATES_PER_ACCOUNT = 40
+MAX_ACTIVE_QUEUE_SIZE = 50
+MAX_PRIORITY_QUEUE_SIZE = 15
+MAX_BROWSE_QUEUE_SIZE = 40
+
+# Gmail search for priority tier (unread, likely need reply)
 SCAN_QUERY = (
     "is:inbox is:unread -from:me "
     "-category:promotions -category:social -category:updates "
@@ -16,8 +21,12 @@ SCAN_QUERY = (
     f"newer_than:{REPLY_MAX_AGE_DAYS}d"
 )
 
-MAX_CANDIDATES_PER_ACCOUNT = 15
-MAX_ACTIVE_QUEUE_SIZE = 20
+# Broader inbox scan — read + unread recent mail for browse tier
+BROWSE_SCAN_QUERY = (
+    "is:inbox -from:me "
+    "-category:promotions -category:social -category:updates "
+    f"newer_than:{REPLY_MAX_AGE_DAYS}d"
+)
 
 # Retry drafting for items stuck in needs_draft longer than this (minutes)
 STUCK_DRAFT_RETRY_MINUTES = 2

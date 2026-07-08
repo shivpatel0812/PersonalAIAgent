@@ -82,6 +82,16 @@ export async function approveEmailDraft(
   return response.json();
 }
 
+export async function generateEmailDraft(itemId: string): Promise<{ item: EmailAgentItem }> {
+  const response = await fetch(`${apiUrl}/email-agent/items/${itemId}/draft`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    await parseError(response, "Failed to generate draft");
+  }
+  return response.json();
+}
+
 export async function discardEmailItem(itemId: string): Promise<void> {
   const response = await fetch(`${apiUrl}/email-agent/items/${itemId}/discard`, {
     method: "POST",

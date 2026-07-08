@@ -14,7 +14,7 @@ from app.agents.email_agent.detector import (
     get_message_thread_id,
     is_likely_automated,
     latest_inbound_message_id as gmail_latest_inbound,
-    list_reply_candidates,
+    list_browse_candidates,
 )
 from app.agents.email_agent.date_utils import is_within_reply_window
 from app.agents.email_agent.drafter import classify_needs_reply, generate_initial_draft, revise_draft
@@ -43,9 +43,12 @@ from app.ai.config import settings as ai_settings
 from app.ai.tools.gmail_tool import _fetch_thread_conversation
 from app.db.email_agent import (
     ACTIVE_STATUSES,
+    PRIORITY_STATUSES,
     EmailAgentItem,
     add_chat_message,
     count_active_items,
+    count_browse_items,
+    count_priority_items,
     create_item,
     get_item,
     get_item_by_message_id,
@@ -66,7 +69,7 @@ from app.microsoft.graph_mail import (
     latest_inbound_message_id as outlook_latest_inbound,
 )
 from app.microsoft.graph_mail import (
-    list_unread_inbox_candidates,
+    list_browse_inbox_candidates,
 )
 from app.microsoft.oauth import get_access_token
 
@@ -82,6 +85,15 @@ class ScanCandidate:
     from_name: str | None
     snippet: str
     date: str = ""
+    is_unread: bool = True
+
+
+_STATUS_SORT_ORDER = {
+    "needs_draft": 0,
+    "waiting_on_you": 1,
+    "draft_ready": 2,
+    "listed": 3,
+}
 
 
 def _reply_subject(subject: str) -> str:
@@ -162,18 +174,27 @@ async def _queue_candidate(
     candidate: ScanCandidate,
     account_email: str,
     conversation,
-) -> tuple[int, int]:
-    """Queue one candidate and draft it. Returns (queued, drafted) counts."""
-    needs_reply, summary = classify_needs_reply(
-        account_email=account_email,
-        subject=candidate.subject,
-        from_email=candidate.from_email,
-        snippet=candidate.snippet,
-        conversation=conversation,
-        reply_to_message_id=candidate.message_id,
-    )
-    if not needs_reply:
-        return 0, 0
+) -> tuple[int, int, int]:
+    """Queue a candidate. Returns (priority_queued, drafted, browse_queued)."""
+    sender_context = await get_sender_context(candidate.from_email)
+    always_urgent = bool(sender_context and sender_context.always_urgent)
+    summary = candidate.snippet
+    should_priority = False
+
+    if candidate.is_unread:
+        if always_urgent:
+            should_priority = True
+        else:
+            needs_reply, classified_summary = classify_needs_reply(
+                account_email=account_email,
+                subject=candidate.subject,
+                from_email=candidate.from_email,
+                snippet=candidate.snippet,
+                conversation=conversation,
+                reply_to_message_id=candidate.message_id,
+            )
+            summary = classified_summary or summary
+            should_priority = needs_reply
 
     create_kwargs: dict = {
         "mail_provider": mail_provider,
@@ -183,22 +204,30 @@ async def _queue_candidate(
         "sender_email": candidate.from_email,
         "subject": candidate.subject,
         "summary": summary or candidate.snippet,
-        "status": "needs_draft",
     }
     if mail_provider == "microsoft":
         create_kwargs["microsoft_account_id"] = account_id
     else:
         create_kwargs["google_account_id"] = account_id
 
-    item = await create_item(**create_kwargs)
+    if should_priority and await count_priority_items() < agent_settings.MAX_PRIORITY_QUEUE_SIZE:
+        create_kwargs["status"] = "needs_draft"
+        item = await create_item(**create_kwargs)
+        try:
+            await draft_item(item.id)
+            return 1, 1, 0
+        except Exception as exc:
+            logger.exception("Failed to draft item %s: %s", item.id, exc)
+            await _discard_failed_item(item.id, str(exc))
+            return 1, 0, 0
 
-    try:
-        await draft_item(item.id)
-        return 1, 1
-    except Exception as exc:
-        logger.exception("Failed to draft item %s: %s", item.id, exc)
-        await _discard_failed_item(item.id, str(exc))
-        return 1, 0
+    if await count_browse_items() >= agent_settings.MAX_BROWSE_QUEUE_SIZE:
+        return 0, 0, 0
+
+    create_kwargs["status"] = "listed"
+    create_kwargs["summary"] = summary or candidate.snippet
+    await create_item(**create_kwargs)
+    return 0, 0, 1
 
 
 async def _process_scan_candidate(
@@ -322,7 +351,8 @@ async def scan_for_reply_candidates() -> dict:
     recovery_result = await recover_stuck_drafts()
 
     scanned = 0
-    queued = 0
+    queued_priority = 0
+    queued_browse = 0
     drafted = 0
     skipped_automated = 0
 
@@ -331,7 +361,7 @@ async def scan_for_reply_candidates() -> dict:
         if not credentials:
             continue
 
-        gmail_candidates = list_reply_candidates(
+        gmail_candidates = list_browse_candidates(
             credentials,
             account_email=account.email,
         )
@@ -344,6 +374,7 @@ async def scan_for_reply_candidates() -> dict:
                 from_name=c.from_name,
                 snippet=c.snippet,
                 date=c.date,
+                is_unread=c.is_unread,
             )
             for c in gmail_candidates
         ]
@@ -381,22 +412,23 @@ async def scan_for_reply_candidates() -> dict:
             service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
             conversation = _fetch_thread_conversation(service, thread_id)
 
-            q, d = await _queue_candidate(
+            q_pri, d, q_browse = await _queue_candidate(
                 mail_provider="google",
                 account_id=account.id,
                 candidate=candidate,
                 account_email=account.email,
                 conversation=conversation,
             )
-            queued += q
+            queued_priority += q_pri
             drafted += d
+            queued_browse += q_browse
 
     for account in microsoft_accounts:
         token = get_access_token(account.id)
         if not token:
             continue
 
-        raw_candidates = list_unread_inbox_candidates(
+        raw_candidates = list_browse_inbox_candidates(
             token,
             account_email=account.email,
         )
@@ -409,6 +441,7 @@ async def scan_for_reply_candidates() -> dict:
                 from_name=c.get("from_name"),
                 snippet=c["snippet"],
                 date=c.get("date", ""),
+                is_unread=c.get("is_unread", True),
             )
             for c in raw_candidates
         ]
@@ -440,26 +473,40 @@ async def scan_for_reply_candidates() -> dict:
 
             conversation = outlook_fetch_thread(token, candidate.thread_id)
 
-            q, d = await _queue_candidate(
+            q_pri, d, q_browse = await _queue_candidate(
                 mail_provider="microsoft",
                 account_id=account.id,
                 candidate=candidate,
                 account_email=account.email,
                 conversation=conversation,
             )
-            queued += q
+            queued_priority += q_pri
             drafted += d
+            queued_browse += q_browse
 
     return {
         "status": "ok",
         "scanned": scanned,
-        "queued": queued,
+        "queued": queued_priority + queued_browse,
+        "queued_priority": queued_priority,
+        "queued_browse": queued_browse,
         "drafted": drafted,
         "skipped_automated": skipped_automated,
         "cleanup": cleanup_result,
         "old_cleanup": old_cleanup_result,
         "recovery": recovery_result,
     }
+
+
+async def generate_draft_for_item(item_id: str) -> EmailAgentItem:
+    """Generate a draft on demand for a browse-tier email."""
+    item = await get_item(item_id)
+    if not item:
+        raise ValueError("Item not found")
+    if item.status != "listed":
+        raise ValueError("Draft can only be generated for browse-tier emails")
+
+    return await draft_item(item_id)
 
 
 async def draft_item(item_id: str) -> EmailAgentItem:
@@ -721,6 +768,12 @@ async def list_items() -> list[dict]:
     await cleanup_bad_queue_items()
     await cleanup_old_queue_items()
     items = await list_active_items()
+    items.sort(
+        key=lambda item: (
+            0 if item.status in PRIORITY_STATUSES else 1,
+            _STATUS_SORT_ORDER.get(item.status, 9),
+        )
+    )
     result: list[dict] = []
     for item in items:
         context = await get_sender_context(item.sender_email, user_id=item.user_id)

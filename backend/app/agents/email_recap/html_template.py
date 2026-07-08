@@ -67,6 +67,17 @@ def generate_email_digest_html(
                 base_url=base_url,
             )
 
+            # Build action needed section if available
+            action_html = ""
+            if email.get("action_needed"):
+                action_html = f"""
+                    <div style="background: rgba(251, 191, 36, 0.1); border-left: 3px solid #fbbf24; padding: 10px 12px; margin: 12px 0; border-radius: 6px;">
+                        <div style="color: #fbbf24; font-weight: 600; font-size: 13px;">
+                            📋 {email.get("action_needed")}
+                        </div>
+                    </div>
+                """
+
             items.append(f"""
                 <div style="background: #1e293b; border-left: 4px solid {color}; padding: 20px; margin: 15px 0; border-radius: 8px;">
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
@@ -79,6 +90,8 @@ def generate_email_digest_html(
                             </div>
                         </div>
                     </div>
+
+                    {action_html}
 
                     <div style="color: #cbd5e1; font-size: 14px; line-height: 1.6; margin: 12px 0;">
                         {email.get("summary", "No summary available")}

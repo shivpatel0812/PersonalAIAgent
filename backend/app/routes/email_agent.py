@@ -6,13 +6,14 @@ from app.agents.email_agent.service import (
     adjust_item_draft,
     approve_and_send_item,
     discard_item,
+    generate_draft_for_item,
     get_item_detail,
     get_item_thread,
     list_items,
     scan_for_reply_candidates,
 )
 from app.agents.scheduler import scheduler_running
-from app.db.email_agent import count_active_items
+from app.db.email_agent import count_active_items, count_priority_items
 
 router = APIRouter(prefix="/email-agent", tags=["email-agent"])
 
@@ -32,6 +33,7 @@ async def email_agent_status() -> dict:
         "scheduler_running": scheduler_running(),
         "scan_interval_minutes": agent_settings.SCAN_INTERVAL_MINUTES,
         "active_count": await count_active_items(),
+        "priority_count": await count_priority_items(),
         "max_queue_size": agent_settings.MAX_ACTIVE_QUEUE_SIZE,
     }
 
@@ -73,6 +75,17 @@ async def adjust_email_draft(item_id: str, body: AdjustDraftRequest) -> dict:
 async def approve_email_draft(item_id: str, body: ApproveDraftRequest) -> dict:
     try:
         return await approve_and_send_item(item_id, body.draftResponse.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/items/{item_id}/draft")
+async def generate_email_draft(item_id: str) -> dict:
+    try:
+        item = await generate_draft_for_item(item_id)
+        return {"item": item.to_api_dict()}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
