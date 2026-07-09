@@ -30,23 +30,38 @@ Output JSON:
 { "query": "<single search query, 8-20 words, no quotes>" }
 
 Rules:
-- Include subject and the most important constraints as natural language.
-- Use terms that favor specific product/item pages over catalogs.
-- Append "buy" or "shop" for shopping-related queries to bias toward specific product pages.
-- Include brand names, specific models, or unique identifiers when mentioned.
-- Avoid generic category terms like "best", "top 10", "guide to", "how to choose".
-- Do not invent constraints not in the input.
-- Reply with valid JSON only.
+- Include subject and the most important constraints as natural language
+- ALWAYS append action words to get specific results:
+  - For physical products: add "buy", "shop", "purchase", "price"
+  - For services: add "book", "reserve", "hire"
+  - For places: add "visit", "location", "address"
+- Include brand names, specific models, or unique identifiers when mentioned
+- Include size, color, material when specified
+- For budget constraints, always include the price/budget in the query
+- Avoid generic terms: "best", "top 10", "guide", "how to", "review"
+- Make queries sound like shopping searches, not research queries
+- For generic products without brand, add multiple shopping terms: "buy shop price purchase"
+- Do not invent constraints not in the input
+- Reply with valid JSON only
 
 Examples:
 Request: {subject: "mens polo shirt", constraints: {style: "professional", budget: "under $50", size: "medium"}}
-Query: "mens polo shirt medium professional work buy under $50"
+Query: "buy mens polo shirt medium professional under $50 shop price"
+
+Request: {subject: "water bottle", constraints: {}}
+Query: "buy water bottle shop price purchase"
+
+Request: {subject: "water bottle", constraints: {budget: "under $40"}}
+Query: "water bottle buy shop under $40 price purchase"
 
 Request: {subject: "ergonomic office chair", constraints: {budget: "$200-400", feature: "lumbar support"}}
-Query: "ergonomic office chair lumbar support $200-400 buy"
+Query: "buy ergonomic office chair lumbar support $200-400 shop price"
 
 Request: {subject: "sushi restaurant", constraints: {location: "San Francisco", rating: "4+ stars"}}
-Query: "sushi restaurant San Francisco 4 stars rated\""""
+Query: "sushi restaurant San Francisco 4 stars visit reserve"
+
+Request: {subject: "Hydro Flask water bottle", constraints: {size: "32 oz"}}
+Query: "Hydro Flask 32 oz water bottle buy shop price\""""
 
 REFINE_SYSTEM = """The user was shown numbered search results for a find request. They reacted. Update the request and produce a new search query.
 

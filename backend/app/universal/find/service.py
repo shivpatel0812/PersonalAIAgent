@@ -148,16 +148,31 @@ Evaluate each result and determine which to keep vs drop."""
         data = _call_llm_json(FILTER_RESULTS_SYSTEM, filter_prompt, max_tokens=1000)
         filtered_data = data.get("filtered", [])
 
-        # Create a map of index to keep decision
-        keep_map = {item["index"]: item.get("keep", False) for item in filtered_data}
+        # Create a map of index to keep decision with reasons
+        keep_map = {
+            item["index"]: {
+                "keep": item.get("keep", False),
+                "reason": item.get("reason", "")
+            }
+            for item in filtered_data
+        }
+
+        # Log each result and filter decision
+        logger.info(f"=== FILTER RESULTS for '{request.subject}' ===")
+        logger.info(f"Tavily returned {len(results)} results:")
+        for i, r in enumerate(results):
+            decision = keep_map.get(i, {})
+            kept = decision.get("keep", False)
+            reason = decision.get("reason", "no reason given")
+            status = "✓ KEEP" if kept else "✗ DROP"
+            logger.info(f"  [{status}] #{i+1}: {r.title[:60]}")
+            logger.info(f"          URL: {r.url[:80]}")
+            logger.info(f"          Reason: {reason}")
 
         # Filter results based on LLM decision
-        kept_results = [r for i, r in enumerate(results) if keep_map.get(i, False)]
+        kept_results = [r for i, r in enumerate(results) if keep_map.get(i, {}).get("keep", False)]
 
-        logger.info(
-            f"Filtered {len(results)} results down to {len(kept_results)} "
-            f"for request: {request.subject}"
-        )
+        logger.info(f"=== FINAL: Kept {len(kept_results)} of {len(results)} results ===")
 
         return kept_results
     except Exception as exc:
@@ -168,8 +183,11 @@ Evaluate each result and determine which to keep vs drop."""
 def _run_search(query: str) -> tuple[str, list[FindResult]]:
     if not ai_settings.tavily_configured:
         raise ValueError("Tavily API key is not configured")
+    logger.info(f"🔍 Searching Tavily with query: '{query}'")
     raw = web_search(query, max_results=MAX_RESULTS, include_images=True)
-    return query, _search_results_to_find(raw)
+    results = _search_results_to_find(raw)
+    logger.info(f"📊 Tavily returned {len(results)} results")
+    return query, results
 
 
 async def _run_filtered_search(request: FindRequest, query: str) -> tuple[str, list[FindResult]]:
