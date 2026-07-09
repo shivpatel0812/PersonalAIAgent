@@ -1,6 +1,10 @@
 import { apiUrl } from "./client";
 import type { FindTurnResponse, ThumbFeedback } from "../../types/find";
 
+export function getFindImageProxyUrl(imageUrl: string): string {
+  return `${apiUrl}/find/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let detail = `Request failed: ${response.status}`;
