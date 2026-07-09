@@ -12,6 +12,7 @@ import { TweaksPanel } from "../components/tweaks/TweaksPanel";
 import { GoogleCalendarPanel } from "../components/integrations/GoogleCalendarPanel";
 import { RobinhoodPanel } from "../components/integrations/RobinhoodPanel";
 import { EmailAgentPanel } from "../components/email-agent/EmailAgentPanel";
+import { FindPanel } from "../components/find/FindPanel";
 import { fetchEmailAgentItems } from "../lib/api/emailAgent";
 import { RESEARCH_PAGES, getPageConfig, type PageType } from "../types/conversation";
 
@@ -31,6 +32,7 @@ export function ConversationPage() {
   const [emailAgentCount, setEmailAgentCount] = useState(0);
   const pageConfig = getPageConfig(activePage);
   const isEmailAgentView = activePage === "personal" && personalView === "email-agent";
+  const isFindView = activePage === "personal" && personalView === "find";
 
   const {
     threads,
@@ -208,6 +210,16 @@ export function ConversationPage() {
                 )}
               </div>
             </>
+          ) : isFindView ? (
+            <>
+              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                Personal Assistant / Find
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold text-slate-100">Find anything</h1>
+              <p className="mt-1 text-sm text-slate-500">
+                Describe what you want — refine results with feedback until it&apos;s right
+              </p>
+            </>
           ) : (
             <>
               <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-slate-500">
@@ -229,6 +241,8 @@ export function ConversationPage() {
             microsoftOauthError={microsoftOauthError}
             onQueueCountChange={setEmailAgentCount}
           />
+        ) : isFindView ? (
+          <FindPanel />
         ) : (
           <div className="flex flex-1 flex-col px-6">
             {displayError && (

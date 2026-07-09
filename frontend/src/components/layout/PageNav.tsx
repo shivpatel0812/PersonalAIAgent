@@ -1,6 +1,6 @@
 import type { PageConfig, PageType } from "../../types/conversation";
 
-export type PersonalSubView = "chat" | "email-agent";
+export type PersonalSubView = "chat" | "email-agent" | "find";
 
 type PageNavProps = {
   pages: PageConfig[];
@@ -61,6 +61,17 @@ export function PageNav({
                       }`}
                     >
                       Chat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onPersonalSubViewChange("find")}
+                      className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
+                        personalSubView === "find"
+                          ? "bg-slate-800 text-slate-100"
+                          : "text-slate-500 hover:bg-slate-900/60 hover:text-slate-300"
+                      }`}
+                    >
+                      Find anything
                     </button>
                     <button
                       type="button"
