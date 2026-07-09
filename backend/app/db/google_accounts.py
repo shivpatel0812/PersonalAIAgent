@@ -4,11 +4,27 @@ Handles multi-account OAuth token storage.
 """
 
 from datetime import datetime
+import re
 from typing import Any
 
 from google.oauth2.credentials import Credentials
 
 from app.supabase_client import get_supabase_client
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.replace("Z", "+00:00")
+    if "." in text:
+        head, tail = text.split(".", 1)
+        frac_match = re.match(r"(\d+)", tail)
+        tz_match = re.search(r"([+-]\d{2}:\d{2})$", tail)
+        if frac_match:
+            frac = (frac_match.group(1) + "000000")[:6]
+            tz = tz_match.group(1) if tz_match else ""
+            text = f"{head}.{frac}{tz}"
+    return datetime.fromisoformat(text)
 
 
 class GoogleAccount:
@@ -66,8 +82,8 @@ async def list_accounts() -> list[GoogleAccount]:
                 tokens=row["tokens"],
                 granted_scopes=row.get("granted_scopes", []),
                 is_primary=row.get("is_primary", False),
-                created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
-                updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+                created_at=_parse_timestamp(row["created_at"]) if row.get("created_at") else None,
+                updated_at=_parse_timestamp(row["updated_at"]) if row.get("updated_at") else None,
             )
         )
     return accounts
@@ -89,8 +105,8 @@ async def get_account(account_id: str) -> GoogleAccount | None:
         tokens=row["tokens"],
         granted_scopes=row.get("granted_scopes", []),
         is_primary=row.get("is_primary", False),
-        created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
-        updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+        created_at=_parse_timestamp(row["created_at"]) if row.get("created_at") else None,
+        updated_at=_parse_timestamp(row["updated_at"]) if row.get("updated_at") else None,
     )
 
 
@@ -112,8 +128,8 @@ async def get_primary_account() -> GoogleAccount | None:
         tokens=row["tokens"],
         granted_scopes=row.get("granted_scopes", []),
         is_primary=row.get("is_primary", False),
-        created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
-        updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+        created_at=_parse_timestamp(row["created_at"]) if row.get("created_at") else None,
+        updated_at=_parse_timestamp(row["updated_at"]) if row.get("updated_at") else None,
     )
 
 
@@ -212,8 +228,8 @@ async def save_account(
         tokens=row["tokens"],
         granted_scopes=row.get("granted_scopes", []),
         is_primary=row.get("is_primary", False),
-        created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
-        updated_at=datetime.fromisoformat(row["updated_at"]) if row.get("updated_at") else None,
+        created_at=_parse_timestamp(row["created_at"]) if row.get("created_at") else None,
+        updated_at=_parse_timestamp(row["updated_at"]) if row.get("updated_at") else None,
     )
 
 

@@ -98,6 +98,7 @@ def _list_candidates(
                 account_email=account_email,
                 id=message["id"],
                 message_id=message["id"],
+                thread_id=message.get("threadId", message["id"]),
                 subject=headers.get("Subject", "(No subject)"),
                 from_email=from_email,
                 from_name=from_name,
