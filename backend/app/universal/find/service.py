@@ -110,6 +110,7 @@ def _search_results_to_find(results: list[SearchResult]) -> list[FindResult]:
             title=result.title,
             snippet=result.snippet,
             url=result.url,
+            image_url=result.image_url,
         )
         for index, result in enumerate(results, start=1)
     ]
@@ -118,7 +119,7 @@ def _search_results_to_find(results: list[SearchResult]) -> list[FindResult]:
 def _run_search(query: str) -> tuple[str, list[FindResult]]:
     if not ai_settings.tavily_configured:
         raise ValueError("Tavily API key is not configured")
-    raw = web_search(query, max_results=MAX_RESULTS)
+    raw = web_search(query, max_results=MAX_RESULTS, include_images=True)
     return query, _search_results_to_find(raw)
 
 

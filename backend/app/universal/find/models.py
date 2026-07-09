@@ -20,6 +20,7 @@ class FindResult(BaseModel):
     title: str
     snippet: str
     url: str
+    image_url: str | None = None
 
 
 class ThumbFeedback(BaseModel):

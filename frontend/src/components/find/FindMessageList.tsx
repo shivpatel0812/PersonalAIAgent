@@ -34,9 +34,14 @@ export function FindMessageList({
         const results = message.payload?.results ?? [];
 
         return (
-          <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+          <div
+            key={message.id}
+            className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+          >
             <div
-              className={`max-w-2xl rounded-2xl px-4 py-3 ${
+              className={`${
+                isUser ? "max-w-2xl" : results.length > 0 ? "max-w-5xl w-full" : "max-w-2xl"
+              } rounded-2xl px-4 py-3 ${
                 isUser
                   ? "bg-accent/15 text-slate-100"
                   : "border border-slate-800 bg-slate-900/60 text-slate-200"
@@ -44,7 +49,7 @@ export function FindMessageList({
             >
               <p className="whitespace-pre-wrap text-sm leading-6">{message.content}</p>
               {!isUser && results.length > 0 && (
-                <div className="mt-4 space-y-3">
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {results.map((result) => (
                     <FindResultCard
                       key={`${message.id}-${result.index}`}

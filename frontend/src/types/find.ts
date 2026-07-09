@@ -11,6 +11,7 @@ export type FindResult = {
   title: string;
   snippet: string;
   url: string;
+  image_url?: string | null;
 };
 
 export type FindMessage = {
