@@ -124,6 +124,7 @@ KEEP a result if:
 - URL suggests detail page: /p/, /product/, /dp/, /item/, /pd/, or brand/model identifier
 - Title is specific: includes brand name, model name, or specific identifiers
 - Even if not perfect match, represents a specific purchasable item
+- **When in doubt, KEEP** - better to show a potentially useful result than nothing
 
 Respond with JSON:
 {

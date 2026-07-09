@@ -175,22 +175,44 @@ def _run_search(query: str) -> tuple[str, list[FindResult]]:
 async def _run_filtered_search(request: FindRequest, query: str) -> tuple[str, list[FindResult]]:
     """Run search with relevance filtering and optional backfill."""
     search_query, raw_results = _run_search(query)
+
+    # If we got 0 results from Tavily, return immediately
+    if not raw_results:
+        logger.warning(f"Tavily returned 0 results for query: {query}")
+        return search_query, []
+
     filtered = await _filter_results(request, raw_results)
 
-    # If we have fewer than 3 results, do one backfill search
-    if len(filtered) < 3 and len(filtered) < len(raw_results):
-        logger.info(f"Only {len(filtered)} results after filtering, attempting backfill")
-        # Create a more specific query by appending terms
-        backfill_query = f"{query} specific product"
-        _, backfill_results = _run_search(backfill_query)
-        backfill_filtered = await _filter_results(request, backfill_results)
+    # If filtering removed ALL results, be less aggressive
+    if len(filtered) == 0 and len(raw_results) > 0:
+        logger.warning(
+            f"Filter dropped all {len(raw_results)} results for '{request.subject}'. "
+            "Returning top 3 unfiltered results as fallback."
+        )
+        # Return top 3 raw results as fallback
+        filtered = raw_results[:3]
 
-        # Combine results, avoiding duplicates by URL
-        seen_urls = {r.url for r in filtered}
-        for result in backfill_filtered:
-            if result.url not in seen_urls and len(filtered) < MAX_RESULTS:
-                filtered.append(result)
-                seen_urls.add(result.url)
+    # If we have fewer than 2 results, do one backfill search
+    elif len(filtered) < 2 and len(filtered) < len(raw_results):
+        logger.info(f"Only {len(filtered)} results after filtering, attempting backfill")
+        # Create a more specific query by appending "buy"
+        backfill_query = f"{query} buy"
+        _, backfill_results = _run_search(backfill_query)
+
+        if backfill_results:
+            backfill_filtered = await _filter_results(request, backfill_results)
+
+            # If backfill also returns nothing, use raw backfill results
+            if not backfill_filtered and backfill_results:
+                logger.info("Backfill filter also dropped everything, using raw results")
+                backfill_filtered = backfill_results[:3]
+
+            # Combine results, avoiding duplicates by URL
+            seen_urls = {r.url for r in filtered}
+            for result in backfill_filtered:
+                if result.url not in seen_urls and len(filtered) < MAX_RESULTS:
+                    filtered.append(result)
+                    seen_urls.add(result.url)
 
         logger.info(f"After backfill: {len(filtered)} total results")
 
