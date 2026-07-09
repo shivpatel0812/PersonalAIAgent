@@ -1,5 +1,5 @@
 import { apiUrl } from "./client";
-import type { FindTurnResponse, ThumbFeedback } from "../../types/find";
+import type { FindMessageFeedback, FindTurnResponse } from "../../types/find";
 
 export function getFindImageProxyUrl(imageUrl: string): string {
   return `${apiUrl}/find/image-proxy?url=${encodeURIComponent(imageUrl)}`;
@@ -33,7 +33,7 @@ export async function fetchFindSession(sessionId: string): Promise<FindTurnRespo
 export async function sendFindMessage(
   sessionId: string,
   message: string,
-  feedback?: ThumbFeedback,
+  feedback?: FindMessageFeedback,
 ): Promise<FindTurnResponse> {
   const response = await fetch(`${apiUrl}/find/sessions/${sessionId}/message`, {
     method: "POST",

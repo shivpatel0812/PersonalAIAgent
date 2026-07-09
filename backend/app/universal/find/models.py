@@ -29,6 +29,14 @@ class ThumbFeedback(BaseModel):
     value: Literal["up", "down"]
 
 
+class RefineFeedback(BaseModel):
+    type: Literal["refine"]
+    ratings: list[dict[str, Any]]
+
+
+FindMessageFeedback = ThumbFeedback | RefineFeedback | None
+
+
 class FindSessionState(BaseModel):
     phase: Literal["gathering", "results"] = "gathering"
     request: FindRequest | None = None

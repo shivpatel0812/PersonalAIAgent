@@ -40,3 +40,10 @@ export type ThumbFeedback = {
   index: number;
   value: "up" | "down";
 };
+
+export type RefineFeedback = {
+  type: "refine";
+  ratings: Array<{ index: number; value: "up" | "down" }>;
+};
+
+export type FindMessageFeedback = ThumbFeedback | RefineFeedback | null;

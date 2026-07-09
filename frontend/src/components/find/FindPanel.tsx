@@ -16,11 +16,16 @@ export function FindPanel() {
   const [loading, setLoading] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [ratings, setRatings] = useState<Map<number, "up" | "down">>(new Map());
+  const [showRefineButton, setShowRefineButton] = useState(false);
 
   const applyResponse = useCallback((response: FindTurnResponse) => {
     setSessionId(response.session_id);
     setMessages(response.messages);
     setPhase(response.phase);
+    // Clear ratings when new results arrive
+    setRatings(new Map());
+    setShowRefineButton(false);
   }, []);
 
   useEffect(() => {
@@ -46,7 +51,10 @@ export function FindPanel() {
     };
   }, []);
 
-  const handleSend = async (message: string, feedback?: { index: number; value: "up" | "down" }) => {
+  const handleSend = async (
+    message: string,
+    feedback?: { type: "thumb"; index: number; value: "up" | "down" } | { type: "refine"; ratings: Array<{ index: number; value: "up" | "down" }> }
+  ) => {
     if (!sessionId || loading) return;
     const trimmed = message.trim();
     if (!trimmed && !feedback) return;
@@ -54,13 +62,7 @@ export function FindPanel() {
     setLoading(true);
     setError(null);
     try {
-      const response = await sendFindMessage(
-        sessionId,
-        trimmed,
-        feedback
-          ? { type: "thumb", index: feedback.index, value: feedback.value }
-          : undefined,
-      );
+      const response = await sendFindMessage(sessionId, trimmed, feedback);
       applyResponse(response);
       setInput("");
     } catch (err) {
@@ -75,7 +77,24 @@ export function FindPanel() {
   };
 
   const handleThumb = (index: number, value: "up" | "down") => {
-    void handleSend("", { index, value });
+    setRatings((prev) => {
+      const next = new Map(prev);
+      if (next.get(index) === value) {
+        next.delete(index); // Toggle off if same button clicked again
+      } else {
+        next.set(index, value);
+      }
+      return next;
+    });
+    setShowRefineButton(true);
+  };
+
+  const handleRefineSearch = () => {
+    const ratingsArray = Array.from(ratings.entries()).map(([index, value]) => ({
+      index,
+      value,
+    }));
+    void handleSend("", { type: "refine", ratings: ratingsArray });
   };
 
   const handleNewSearch = async () => {
@@ -106,6 +125,9 @@ export function FindPanel() {
         loading={loading || bootstrapping}
         onThumb={handleThumb}
         thumbDisabled={loading || phase !== "results"}
+        ratings={ratings}
+        showRefineButton={showRefineButton}
+        onRefineSearch={handleRefineSearch}
       />
 
       <div className="border-t border-slate-800 px-6 py-4">

@@ -4,6 +4,7 @@ import type { FindResult } from "../../types/find";
 
 type FindResultCardProps = {
   result: FindResult;
+  rating?: "up" | "down";
   onThumb: (index: number, value: "up" | "down") => void;
   disabled?: boolean;
 };
@@ -22,9 +23,12 @@ function ImagePlaceholder() {
   );
 }
 
-export function FindResultCard({ result, onThumb, disabled = false }: FindResultCardProps) {
+export function FindResultCard({ result, rating, onThumb, disabled = false }: FindResultCardProps) {
   const [imageFailed, setImageFailed] = useState(false);
   const showImage = Boolean(result.image_url) && !imageFailed;
+
+  const isThumbUpActive = rating === "up";
+  const isThumbDownActive = rating === "down";
 
   return (
     <article className="group flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950/80 transition hover:border-slate-700">
@@ -76,7 +80,11 @@ export function FindResultCard({ result, onThumb, disabled = false }: FindResult
               type="button"
               disabled={disabled}
               onClick={() => onThumb(result.index, "up")}
-              className="rounded-lg border border-slate-700 px-2 py-1 text-sm text-slate-400 transition hover:border-emerald-500/40 hover:text-emerald-300 disabled:opacity-40"
+              className={`rounded-lg border px-2 py-1 text-sm transition disabled:opacity-40 ${
+                isThumbUpActive
+                  ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-300"
+                  : "border-slate-700 text-slate-400 hover:border-emerald-500/40 hover:text-emerald-300"
+              }`}
               title="Like this result"
             >
               👍
@@ -85,7 +93,11 @@ export function FindResultCard({ result, onThumb, disabled = false }: FindResult
               type="button"
               disabled={disabled}
               onClick={() => onThumb(result.index, "down")}
-              className="rounded-lg border border-slate-700 px-2 py-1 text-sm text-slate-400 transition hover:border-rose-500/40 hover:text-rose-300 disabled:opacity-40"
+              className={`rounded-lg border px-2 py-1 text-sm transition disabled:opacity-40 ${
+                isThumbDownActive
+                  ? "border-rose-500/60 bg-rose-500/20 text-rose-300"
+                  : "border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300"
+              }`}
               title="Dislike this result"
             >
               👎

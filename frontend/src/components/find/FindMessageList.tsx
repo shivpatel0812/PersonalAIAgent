@@ -6,6 +6,9 @@ type FindMessageListProps = {
   loading?: boolean;
   onThumb: (index: number, value: "up" | "down") => void;
   thumbDisabled?: boolean;
+  ratings: Map<number, "up" | "down">;
+  showRefineButton: boolean;
+  onRefineSearch: () => void;
 };
 
 export function FindMessageList({
@@ -13,6 +16,9 @@ export function FindMessageList({
   loading = false,
   onThumb,
   thumbDisabled = false,
+  ratings,
+  showRefineButton,
+  onRefineSearch,
 }: FindMessageListProps) {
   if (messages.length === 0 && !loading) {
     return (
@@ -49,16 +55,29 @@ export function FindMessageList({
             >
               <p className="whitespace-pre-wrap text-sm leading-6">{message.content}</p>
               {!isUser && results.length > 0 && (
-                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {results.map((result) => (
-                    <FindResultCard
-                      key={`${message.id}-${result.index}`}
-                      result={result}
-                      onThumb={onThumb}
-                      disabled={thumbDisabled}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {results.map((result) => (
+                      <FindResultCard
+                        key={`${message.id}-${result.index}`}
+                        result={result}
+                        rating={ratings.get(result.index)}
+                        onThumb={onThumb}
+                        disabled={thumbDisabled}
+                      />
+                    ))}
+                  </div>
+                  {showRefineButton && (
+                    <div className="mt-6 flex justify-center">
+                      <button
+                        onClick={onRefineSearch}
+                        className="rounded-md bg-accent px-6 py-2 text-sm font-medium text-white hover:bg-accent/90"
+                      >
+                        Refine search based on ratings
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

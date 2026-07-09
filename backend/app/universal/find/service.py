@@ -22,15 +22,18 @@ from app.db.find_sessions import (
     touch_session_title,
 )
 from app.universal.find.models import (
+    FindMessageFeedback,
     FindRequest,
     FindResult,
     FindSessionState,
     FindTurnResponse,
+    RefineFeedback,
     ThumbFeedback,
 )
 from app.universal.find.prompts import (
     BUILD_QUERY_SYSTEM,
     EXTRACT_REQUEST_SYSTEM,
+    FILTER_RESULTS_SYSTEM,
     REFINE_SYSTEM,
 )
 
@@ -116,11 +119,86 @@ def _search_results_to_find(results: list[SearchResult]) -> list[FindResult]:
     ]
 
 
+async def _filter_results(
+    request: FindRequest,
+    results: list[FindResult],
+) -> list[FindResult]:
+    """Filter out irrelevant or non-specific results using LLM."""
+    if not results:
+        return results
+
+    filter_prompt = f"""User request:
+Subject: {request.subject}
+Constraints: {json.dumps(request.constraints, indent=2)}
+
+Results to evaluate:
+{json.dumps([
+    {
+        "index": i,
+        "title": r.title,
+        "url": r.url,
+        "snippet": r.snippet[:200]
+    }
+    for i, r in enumerate(results)
+], indent=2)}
+
+Evaluate each result and determine which to keep vs drop."""
+
+    try:
+        data = _call_llm_json(FILTER_RESULTS_SYSTEM, filter_prompt, max_tokens=1000)
+        filtered_data = data.get("filtered", [])
+
+        # Create a map of index to keep decision
+        keep_map = {item["index"]: item.get("keep", False) for item in filtered_data}
+
+        # Filter results based on LLM decision
+        kept_results = [r for i, r in enumerate(results) if keep_map.get(i, False)]
+
+        logger.info(
+            f"Filtered {len(results)} results down to {len(kept_results)} "
+            f"for request: {request.subject}"
+        )
+
+        return kept_results
+    except Exception as exc:
+        logger.warning(f"Filter failed, returning all results: {exc}")
+        return results
+
+
 def _run_search(query: str) -> tuple[str, list[FindResult]]:
     if not ai_settings.tavily_configured:
         raise ValueError("Tavily API key is not configured")
     raw = web_search(query, max_results=MAX_RESULTS, include_images=True)
     return query, _search_results_to_find(raw)
+
+
+async def _run_filtered_search(request: FindRequest, query: str) -> tuple[str, list[FindResult]]:
+    """Run search with relevance filtering and optional backfill."""
+    search_query, raw_results = _run_search(query)
+    filtered = await _filter_results(request, raw_results)
+
+    # If we have fewer than 3 results, do one backfill search
+    if len(filtered) < 3 and len(filtered) < len(raw_results):
+        logger.info(f"Only {len(filtered)} results after filtering, attempting backfill")
+        # Create a more specific query by appending terms
+        backfill_query = f"{query} specific product"
+        _, backfill_results = _run_search(backfill_query)
+        backfill_filtered = await _filter_results(request, backfill_results)
+
+        # Combine results, avoiding duplicates by URL
+        seen_urls = {r.url for r in filtered}
+        for result in backfill_filtered:
+            if result.url not in seen_urls and len(filtered) < MAX_RESULTS:
+                filtered.append(result)
+                seen_urls.add(result.url)
+
+        logger.info(f"After backfill: {len(filtered)} total results")
+
+    # Re-index results to be sequential starting from 1
+    for i, result in enumerate(filtered, start=1):
+        result.index = i
+
+    return search_query, filtered
 
 
 def _build_query(request: FindRequest) -> str:
@@ -198,11 +276,11 @@ def refine_request(
     return updated, query, assistant_message
 
 
-def handle_message(
+async def handle_message(
     session_id: str,
     *,
     message: str = "",
-    feedback: ThumbFeedback | None = None,
+    feedback: FindMessageFeedback = None,
 ) -> FindTurnResponse:
     row = get_session(session_id)
     if row is None:
@@ -214,8 +292,19 @@ def handle_message(
 
     user_content = message.strip()
     if feedback is not None:
-        thumb_label = "liked" if feedback.value == "up" else "disliked"
-        user_content = user_content or f"{thumb_label} result #{feedback.index}"
+        if isinstance(feedback, ThumbFeedback):
+            thumb_label = "liked" if feedback.value == "up" else "disliked"
+            user_content = user_content or f"{thumb_label} result #{feedback.index}"
+        elif isinstance(feedback, RefineFeedback):
+            # Format batch ratings into readable text
+            ups = [r["index"] for r in feedback.ratings if r.get("value") == "up"]
+            downs = [r["index"] for r in feedback.ratings if r.get("value") == "down"]
+            parts = []
+            if ups:
+                parts.append(f"liked results {', '.join(f'#{i}' for i in ups)}")
+            if downs:
+                parts.append(f"disliked results {', '.join(f'#{i}' for i in downs)}")
+            user_content = user_content or "; ".join(parts)
 
     if not user_content:
         raise ValueError("Message or feedback is required")
@@ -259,7 +348,7 @@ def handle_message(
             return _turn_response(session_id, state, question)
 
         query = _build_query(request)
-        search_query, results = _run_search(query)
+        search_query, results = await _run_filtered_search(request, query)
         intro = _results_intro(request, len(results))
 
         state.phase = "results"
@@ -293,7 +382,7 @@ def handle_message(
     if state.request is None:
         state.phase = "gathering"
         save_session_state(session_id, state)
-        return handle_message(session_id, message=user_content)
+        return await handle_message(session_id, message=user_content)
 
     feedback_meta = feedback.model_dump() if feedback else None
     updated, query, intro = refine_request(
@@ -302,13 +391,21 @@ def handle_message(
         user_content,
         feedback_meta,
     )
-    search_query, results = _run_search(query)
+    search_query, results = await _run_filtered_search(updated, query)
     if not results:
         intro = _results_intro(updated, 0)
 
+    # Determine event type based on feedback type
+    event_type = "refinement"
+    if feedback:
+        if isinstance(feedback, ThumbFeedback):
+            event_type = "thumb"
+        elif isinstance(feedback, RefineFeedback):
+            event_type = "batch_rating"
+
     log_feedback_event(
         session_id=session_id,
-        event_type="thumb" if feedback else "refinement",
+        event_type=event_type,
         user_message=user_content,
         request_before=state.request.model_dump(),
         request_after=updated.model_dump(),
