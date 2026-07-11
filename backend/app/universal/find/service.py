@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from app.agents.email_agent.json_utils import parse_json_response
@@ -27,13 +28,16 @@ from app.universal.find.models import (
     FindResult,
     FindSessionState,
     FindTurnResponse,
+    RatingRecord,
     RefineFeedback,
     ThumbFeedback,
 )
 from app.universal.find.prompts import (
     BUILD_QUERY_SYSTEM,
+    EXTRACT_PREFERENCES_SYSTEM,
     EXTRACT_REQUEST_SYSTEM,
     FILTER_RESULTS_SYSTEM,
+    REFINE_QUERY_SYSTEM,
     REFINE_SYSTEM,
 )
 
@@ -68,6 +72,42 @@ def _call_llm_json(system: str, user: str, *, max_tokens: int = 800) -> dict[str
             max_tokens=max_tokens,
         )
         return parse_json_response(retry)
+
+
+def _extract_preference_patterns(
+    all_ratings: list[RatingRecord],
+) -> tuple[list[str], list[str]]:
+    """Extract liked/disliked attribute patterns from accumulated ratings."""
+    if len(all_ratings) < 3:
+        return [], []
+
+    ratings_data = [
+        {
+            "turn": r.turn,
+            "value": r.value,
+            "title": r.title,
+            "snippet": r.snippet[:150],
+            "url": r.url,
+        }
+        for r in all_ratings
+    ]
+    try:
+        data = _call_llm_json(
+            EXTRACT_PREFERENCES_SYSTEM,
+            json.dumps(ratings_data),
+            max_tokens=500,
+        )
+        liked = list(data.get("liked_attributes") or [])
+        disliked = list(data.get("disliked_attributes") or [])
+        summary = data.get("summary", "")
+        print(f"\n🧠 FIND: Extracted preferences from {len(all_ratings)} ratings:")
+        print(f"   Liked: {liked}")
+        print(f"   Disliked: {disliked}")
+        print(f"   Summary: {summary}")
+        return liked, disliked
+    except Exception as exc:
+        logger.warning(f"Preference extraction failed: {exc}")
+        return [], []
 
 
 def _format_conversation(messages: list) -> str:
@@ -119,6 +159,21 @@ def _search_results_to_find(results: list[SearchResult]) -> list[FindResult]:
     ]
 
 
+# URL patterns that are unambiguously catalog/listing pages (not product pages)
+_CATALOG_URL_PATTERNS = [
+    re.compile(r"amazon\.com/.*/s\?"),          # Amazon search/listing pages
+    re.compile(r"/s\?keywords="),                # Amazon-style search params
+    re.compile(r"[?&]rh=n%3A"),                  # Amazon category browse
+    re.compile(r"/catpage[-/]"),                  # explicit catalog pages
+    re.compile(r"/browse/"),                      # browse pages
+]
+
+
+def _is_obvious_catalog_url(url: str) -> bool:
+    """Fast check for URLs that are unambiguously catalog/listing pages."""
+    return any(p.search(url) for p in _CATALOG_URL_PATTERNS)
+
+
 async def _filter_results(
     request: FindRequest,
     results: list[FindResult],
@@ -126,6 +181,21 @@ async def _filter_results(
     """Filter out irrelevant or non-specific results using LLM."""
     if not results:
         return results
+
+    # Pre-filter: drop unambiguous catalog URLs before LLM call
+    pre_filtered = []
+    for r in results:
+        if _is_obvious_catalog_url(r.url):
+            print(f"  ✗ Pre-filter DROP (catalog URL): {r.title[:60]}")
+            print(f"          URL: {r.url[:80]}")
+        else:
+            pre_filtered.append(r)
+
+    if not pre_filtered:
+        print("⚠️  FIND: Pre-filter dropped everything, falling back to raw results")
+        pre_filtered = results[:3]
+
+    results = pre_filtered
 
     filter_prompt = f"""User request:
 Subject: {request.subject}
@@ -158,21 +228,21 @@ Evaluate each result and determine which to keep vs drop."""
         }
 
         # Log each result and filter decision
-        logger.info(f"=== FILTER RESULTS for '{request.subject}' ===")
-        logger.info(f"Tavily returned {len(results)} results:")
+        print(f"\n=== FILTER RESULTS for '{request.subject}' ===")
+        print(f"Evaluating {len(results)} results:")
         for i, r in enumerate(results):
             decision = keep_map.get(i, {})
             kept = decision.get("keep", False)
             reason = decision.get("reason", "no reason given")
             status = "✓ KEEP" if kept else "✗ DROP"
-            logger.info(f"  [{status}] #{i+1}: {r.title[:60]}")
-            logger.info(f"          URL: {r.url[:80]}")
-            logger.info(f"          Reason: {reason}")
+            print(f"  [{status}] #{i+1}: {r.title[:60]}")
+            print(f"          URL: {r.url[:80]}")
+            print(f"          Reason: {reason}")
 
         # Filter results based on LLM decision
         kept_results = [r for i, r in enumerate(results) if keep_map.get(i, {}).get("keep", False)]
 
-        logger.info(f"=== FINAL: Kept {len(kept_results)} of {len(results)} results ===")
+        print(f"=== FINAL: Kept {len(kept_results)} of {len(results)} results ===\n")
 
         return kept_results
     except Exception as exc:
@@ -183,10 +253,10 @@ Evaluate each result and determine which to keep vs drop."""
 def _run_search(query: str) -> tuple[str, list[FindResult]]:
     if not ai_settings.tavily_configured:
         raise ValueError("Tavily API key is not configured")
-    logger.info(f"🔍 Searching Tavily with query: '{query}'")
+    print(f"\n🔍 FIND: Searching Tavily with query: '{query}'")
     raw = web_search(query, max_results=MAX_RESULTS, include_images=True)
     results = _search_results_to_find(raw)
-    logger.info(f"📊 Tavily returned {len(results)} results")
+    print(f"📊 FIND: Tavily returned {len(results)} results")
     return query, results
 
 
@@ -196,15 +266,15 @@ async def _run_filtered_search(request: FindRequest, query: str) -> tuple[str, l
 
     # If we got 0 results from Tavily, return immediately
     if not raw_results:
-        logger.warning(f"Tavily returned 0 results for query: {query}")
+        print(f"⚠️  FIND: Tavily returned 0 results for query: {query}")
         return search_query, []
 
     filtered = await _filter_results(request, raw_results)
 
     # If filtering removed ALL results, be less aggressive
     if len(filtered) == 0 and len(raw_results) > 0:
-        logger.warning(
-            f"Filter dropped all {len(raw_results)} results for '{request.subject}'. "
+        print(
+            f"⚠️  FIND: Filter dropped all {len(raw_results)} results for '{request.subject}'. "
             "Returning top 3 unfiltered results as fallback."
         )
         # Return top 3 raw results as fallback
@@ -212,9 +282,9 @@ async def _run_filtered_search(request: FindRequest, query: str) -> tuple[str, l
 
     # If we have fewer than 2 results, do one backfill search
     elif len(filtered) < 2 and len(filtered) < len(raw_results):
-        logger.info(f"Only {len(filtered)} results after filtering, attempting backfill")
-        # Create a more specific query by appending "buy"
-        backfill_query = f"{query} buy"
+        print(f"🔄 FIND: Only {len(filtered)} results after filtering, attempting backfill")
+        # Create a more specific query using site-scoped search
+        backfill_query = f"site:amazon.com {query}"
         _, backfill_results = _run_search(backfill_query)
 
         if backfill_results:
@@ -222,7 +292,7 @@ async def _run_filtered_search(request: FindRequest, query: str) -> tuple[str, l
 
             # If backfill also returns nothing, use raw backfill results
             if not backfill_filtered and backfill_results:
-                logger.info("Backfill filter also dropped everything, using raw results")
+                print("⚠️  FIND: Backfill filter also dropped everything, using raw results")
                 backfill_filtered = backfill_results[:3]
 
             # Combine results, avoiding duplicates by URL
@@ -232,13 +302,34 @@ async def _run_filtered_search(request: FindRequest, query: str) -> tuple[str, l
                     filtered.append(result)
                     seen_urls.add(result.url)
 
-        logger.info(f"After backfill: {len(filtered)} total results")
+        print(f"✅ FIND: After backfill: {len(filtered)} total results")
 
     # Re-index results to be sequential starting from 1
     for i, result in enumerate(filtered, start=1):
         result.index = i
 
     return search_query, filtered
+
+
+def _refine_generic_query(request: FindRequest) -> tuple[bool, list[str], str]:
+    """Check if query is generic and suggest specific products if so."""
+    data = _call_llm_json(
+        REFINE_QUERY_SYSTEM,
+        json.dumps({"subject": request.subject, "constraints": request.constraints}),
+        max_tokens=500,
+    )
+
+    is_generic = data.get("is_generic", False)
+    reasoning = data.get("reasoning", "")
+
+    if is_generic:
+        suggested = data.get("suggested_products", [])
+        print(f"\n🤖 FIND: Query '{request.subject}' is generic")
+        print(f"   Suggesting specific products: {suggested}")
+        return True, suggested, reasoning
+    else:
+        print(f"\n✓ FIND: Query '{request.subject}' is already specific")
+        return False, [], reasoning
 
 
 def _build_query(request: FindRequest) -> str:
@@ -300,12 +391,14 @@ def refine_request(
     results: list[FindResult],
     user_feedback: str,
     feedback_meta: dict[str, Any] | None,
+    preference_history: dict[str, Any] | None = None,
 ) -> tuple[FindRequest, str, str]:
     payload = {
         "request": request.model_dump(),
         "results": [r.model_dump() for r in results],
         "user_feedback": user_feedback,
         "feedback_meta": feedback_meta,
+        "preference_history": preference_history,
     }
     data = _call_llm_json(REFINE_SYSTEM, json.dumps(payload))
     updated = _parse_find_request(data.get("request") or {})
@@ -387,9 +480,37 @@ async def handle_message(
             )
             return _turn_response(session_id, state, question)
 
-        query = _build_query(request)
-        search_query, results = await _run_filtered_search(request, query)
-        intro = _results_intro(request, len(results))
+        # Check if query is generic and refine to specific products if needed
+        is_generic, suggested_products, reasoning = _refine_generic_query(request)
+
+        if is_generic and suggested_products:
+            # Search for each suggested product and combine results
+            all_results = []
+            search_queries = []
+
+            for product in suggested_products[:2]:  # Limit to 2 products
+                product_query = f"{product} price"
+                search_queries.append(product_query)
+                _, product_results = await _run_filtered_search(request, product_query)
+                # Add results, avoiding duplicates
+                seen_urls = {r.url for r in all_results}
+                for result in product_results:
+                    if result.url not in seen_urls and len(all_results) < MAX_RESULTS:
+                        all_results.append(result)
+                        seen_urls.add(result.url)
+
+            # Re-index results
+            for i, result in enumerate(all_results, start=1):
+                result.index = i
+
+            results = all_results
+            search_query = " + ".join(search_queries)
+            intro = f"Since '{request.subject}' is a broad category, I'm showing you specific options: {', '.join(suggested_products[:2])}. Here are {len(results)} products:"
+        else:
+            # Normal specific query search
+            query = _build_query(request)
+            search_query, results = await _run_filtered_search(request, query)
+            intro = _results_intro(request, len(results))
 
         state.phase = "results"
         state.request = request
@@ -424,12 +545,51 @@ async def handle_message(
         save_session_state(session_id, state)
         return await handle_message(session_id, message=user_content)
 
+    # Accumulate ratings into session state
+    if isinstance(feedback, RefineFeedback):
+        for rating in feedback.ratings:
+            idx = rating.get("index", 0)
+            val = rating.get("value", "up")
+            # Find the matching result to store title/snippet/url
+            matched = next((r for r in state.last_results if r.index == idx), None)
+            state.all_ratings.append(
+                RatingRecord(
+                    turn=state.refinement_turn,
+                    index=idx,
+                    value=val,
+                    title=matched.title if matched else "",
+                    snippet=matched.snippet if matched else "",
+                    url=matched.url if matched else "",
+                )
+            )
+        state.refinement_turn += 1
+
+    # Extract preference patterns every 2nd turn or if 4+ new ratings
+    preference_history: dict[str, Any] | None = None
+    new_rating_count = len(feedback.ratings) if isinstance(feedback, RefineFeedback) else 0
+    should_extract = (
+        len(state.all_ratings) >= 3
+        and (state.refinement_turn % 2 == 0 or new_rating_count >= 4)
+    )
+    if should_extract:
+        liked, disliked = _extract_preference_patterns(state.all_ratings)
+        state.liked_attributes = liked
+        state.disliked_attributes = disliked
+
+    if state.liked_attributes or state.disliked_attributes:
+        preference_history = {
+            "liked": state.liked_attributes,
+            "disliked": state.disliked_attributes,
+            "all_ratings_summary": f"{len(state.all_ratings)} total ratings across {state.refinement_turn} rounds",
+        }
+
     feedback_meta = feedback.model_dump() if feedback else None
     updated, query, intro = refine_request(
         state.request,
         state.last_results,
         user_content,
         feedback_meta,
+        preference_history=preference_history,
     )
     search_query, results = await _run_filtered_search(updated, query)
     if not results:

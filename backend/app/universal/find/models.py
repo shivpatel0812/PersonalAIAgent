@@ -37,11 +37,25 @@ class RefineFeedback(BaseModel):
 FindMessageFeedback = ThumbFeedback | RefineFeedback | None
 
 
+class RatingRecord(BaseModel):
+    """A single rating from a refinement round."""
+    turn: int
+    index: int
+    value: Literal["up", "down"]
+    title: str
+    snippet: str
+    url: str
+
+
 class FindSessionState(BaseModel):
     phase: Literal["gathering", "results"] = "gathering"
     request: FindRequest | None = None
     last_query: str | None = None
     last_results: list[FindResult] = Field(default_factory=list)
+    all_ratings: list[RatingRecord] = Field(default_factory=list)
+    liked_attributes: list[str] = Field(default_factory=list)
+    disliked_attributes: list[str] = Field(default_factory=list)
+    refinement_turn: int = 0
 
 
 class FindMessageRecord(BaseModel):

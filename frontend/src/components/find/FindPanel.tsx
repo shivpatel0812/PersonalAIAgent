@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorBanner } from "../research/ErrorBanner";
 import {
   createFindSession,
@@ -17,7 +17,16 @@ export function FindPanel() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ratings, setRatings] = useState<Map<number, "up" | "down">>(new Map());
-  const [showRefineButton, setShowRefineButton] = useState(false);
+  const [pendingRefine, setPendingRefine] = useState(false);
+
+  const refineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ratingsRef = useRef(ratings);
+  const loadingRef = useRef(loading);
+  const queuedRefineRef = useRef(false);
+
+  // Keep refs in sync
+  useEffect(() => { ratingsRef.current = ratings; }, [ratings]);
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
 
   const applyResponse = useCallback((response: FindTurnResponse) => {
     setSessionId(response.session_id);
@@ -25,7 +34,7 @@ export function FindPanel() {
     setPhase(response.phase);
     // Clear ratings when new results arrive
     setRatings(new Map());
-    setShowRefineButton(false);
+    setPendingRefine(false);
   }, []);
 
   useEffect(() => {
@@ -69,10 +78,32 @@ export function FindPanel() {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setLoading(false);
+      // If a refine was queued while loading, fire it now
+      if (queuedRefineRef.current) {
+        queuedRefineRef.current = false;
+        fireRefine();
+      }
     }
   };
 
+  const fireRefine = useCallback(() => {
+    const currentRatings = ratingsRef.current;
+    if (currentRatings.size === 0) return;
+    const ratingsArray = Array.from(currentRatings.entries()).map(([index, value]) => ({
+      index,
+      value,
+    }));
+    void handleSend("", { type: "refine", ratings: ratingsArray });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
   const handleSubmit = () => {
+    // Cancel any pending refine timer when user sends a text message
+    if (refineTimerRef.current) {
+      clearTimeout(refineTimerRef.current);
+      refineTimerRef.current = null;
+      setPendingRefine(false);
+    }
     void handleSend(input);
   };
 
@@ -86,16 +117,31 @@ export function FindPanel() {
       }
       return next;
     });
-    setShowRefineButton(true);
+
+    // Debounced auto-refine: reset timer on each rating
+    setPendingRefine(true);
+    if (refineTimerRef.current) {
+      clearTimeout(refineTimerRef.current);
+    }
+    refineTimerRef.current = setTimeout(() => {
+      refineTimerRef.current = null;
+      if (loadingRef.current) {
+        // Queue the refine for after the current request completes
+        queuedRefineRef.current = true;
+      } else {
+        fireRefine();
+      }
+    }, 1500);
   };
 
-  const handleRefineSearch = () => {
-    const ratingsArray = Array.from(ratings.entries()).map(([index, value]) => ({
-      index,
-      value,
-    }));
-    void handleSend("", { type: "refine", ratings: ratingsArray });
-  };
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => {
+      if (refineTimerRef.current) {
+        clearTimeout(refineTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleNewSearch = async () => {
     if (!sessionId || loading) return;
@@ -126,8 +172,7 @@ export function FindPanel() {
         onThumb={handleThumb}
         thumbDisabled={loading || phase !== "results"}
         ratings={ratings}
-        showRefineButton={showRefineButton}
-        onRefineSearch={handleRefineSearch}
+        pendingRefine={pendingRefine}
       />
 
       <div className="border-t border-slate-800 px-6 py-4">

@@ -7,8 +7,7 @@ type FindMessageListProps = {
   onThumb: (index: number, value: "up" | "down") => void;
   thumbDisabled?: boolean;
   ratings: Map<number, "up" | "down">;
-  showRefineButton: boolean;
-  onRefineSearch: () => void;
+  pendingRefine: boolean;
 };
 
 export function FindMessageList({
@@ -17,8 +16,7 @@ export function FindMessageList({
   onThumb,
   thumbDisabled = false,
   ratings,
-  showRefineButton,
-  onRefineSearch,
+  pendingRefine,
 }: FindMessageListProps) {
   if (messages.length === 0 && !loading) {
     return (
@@ -67,14 +65,11 @@ export function FindMessageList({
                       />
                     ))}
                   </div>
-                  {showRefineButton && (
-                    <div className="mt-6 flex justify-center">
-                      <button
-                        onClick={onRefineSearch}
-                        className="rounded-md bg-accent px-6 py-2 text-sm font-medium text-white hover:bg-accent/90"
-                      >
-                        Refine search based on ratings
-                      </button>
+                  {pendingRefine && (
+                    <div className="mt-4 flex justify-center">
+                      <span className="animate-pulse text-xs text-slate-400">
+                        Updating results based on your ratings…
+                      </span>
                     </div>
                   )}
                 </>

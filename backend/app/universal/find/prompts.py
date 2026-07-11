@@ -27,41 +27,41 @@ Input JSON:
 { "subject": "...", "constraints": { ... } }
 
 Output JSON:
-{ "query": "<single search query, 8-20 words, no quotes>" }
+{ "query": "<single search query, 5-15 words, no quotes>" }
 
 Rules:
 - Include subject and the most important constraints as natural language
-- ALWAYS append action words to get specific results:
-  - For physical products: add "buy", "shop", "purchase", "price"
-  - For services: add "book", "reserve", "hire"
-  - For places: add "visit", "location", "address"
+- Append ONE action word at the end to steer toward actionable pages:
+  - For physical products: "price"
+  - For services: "book"
+  - For places: "visit"
+- Do NOT stack multiple shopping keywords (no "buy shop price purchase")
 - Include brand names, specific models, or unique identifiers when mentioned
 - Include size, color, material when specified
 - For budget constraints, always include the price/budget in the query
 - Avoid generic terms: "best", "top 10", "guide", "how to", "review"
 - Make queries sound like shopping searches, not research queries
-- For generic products without brand, add multiple shopping terms: "buy shop price purchase"
 - Do not invent constraints not in the input
 - Reply with valid JSON only
 
 Examples:
 Request: {subject: "mens polo shirt", constraints: {style: "professional", budget: "under $50", size: "medium"}}
-Query: "buy mens polo shirt medium professional under $50 shop price"
+Query: "mens polo shirt medium professional under $50 price"
 
 Request: {subject: "water bottle", constraints: {}}
-Query: "buy water bottle shop price purchase"
+Query: "water bottle price"
 
 Request: {subject: "water bottle", constraints: {budget: "under $40"}}
-Query: "water bottle buy shop under $40 price purchase"
+Query: "water bottle under $40 price"
 
 Request: {subject: "ergonomic office chair", constraints: {budget: "$200-400", feature: "lumbar support"}}
-Query: "buy ergonomic office chair lumbar support $200-400 shop price"
+Query: "ergonomic office chair lumbar support $200-400 price"
 
 Request: {subject: "sushi restaurant", constraints: {location: "San Francisco", rating: "4+ stars"}}
-Query: "sushi restaurant San Francisco 4 stars visit reserve"
+Query: "sushi restaurant San Francisco 4 stars book"
 
 Request: {subject: "Hydro Flask water bottle", constraints: {size: "32 oz"}}
-Query: "Hydro Flask 32 oz water bottle buy shop price\""""
+Query: "Hydro Flask 32 oz water bottle price\""""
 
 REFINE_SYSTEM = """The user was shown numbered search results for a find request. They reacted. Update the request and produce a new search query.
 
@@ -73,7 +73,12 @@ Input JSON:
     ...
   ],
   "user_feedback": "<their message>",
-  "feedback_meta": { "type": "thumb", "index": 3, "value": "up" } | { "type": "refine", "ratings": [...] } | null
+  "feedback_meta": { "type": "thumb", "index": 3, "value": "up" } | { "type": "refine", "ratings": [...] } | null,
+  "preference_history": {
+    "liked": ["stainless steel", "32oz", "CamelBak"],
+    "disliked": ["plastic", "generic brand"],
+    "all_ratings_summary": "5 total ratings across 2 rounds"
+  } | null
 }
 
 Output JSON:
@@ -91,9 +96,52 @@ Rules:
   - Find common attributes across liked results (brand, price range, style, features).
   - Identify what to exclude from disliked results (certain brands, price points, styles).
   - Positive signals override negative when updating constraints.
+- Use preference_history to avoid repeating disliked patterns and lean into liked ones.
+- Preference patterns from earlier rounds are weaker signals than the latest ratings.
 - Always set status to "ready". Do not ask clarifying questions.
+- Append ONE action word at the end of the query: "price" for products, "book" for services, "visit" for places. Do NOT stack multiple shopping keywords.
 - If feedback is ambiguous, make a reasonable assumption and say so in assistant_message.
 - Reply with valid JSON only."""
+
+REFINE_QUERY_SYSTEM = """You help refine vague product searches into specific, searchable products.
+
+Given a search request, determine if it's generic/vague or specific:
+- GENERIC: "water bottle", "running shoes", "laptop" (no brand, no model)
+- SPECIFIC: "Hydro Flask 32oz", "Nike Pegasus 41", "MacBook Pro M3"
+
+If GENERIC, suggest 2-3 specific, well-regarded products that match the request.
+If SPECIFIC, return it unchanged.
+
+Input JSON:
+{
+  "subject": "water bottle",
+  "constraints": {"budget": "under $40"}
+}
+
+Output JSON for GENERIC query:
+{
+  "is_generic": true,
+  "suggested_products": [
+    "Hydro Flask 32oz Wide Mouth water bottle",
+    "Stanley Quencher 40oz tumbler"
+  ],
+  "reasoning": "Generic category query - suggesting popular, well-reviewed options"
+}
+
+Output JSON for SPECIFIC query:
+{
+  "is_generic": false,
+  "original_query": "Hydro Flask 32oz Wide Mouth",
+  "reasoning": "Already specific - includes brand and model"
+}
+
+Rules:
+- Only suggest real, well-known products (not made up)
+- Consider constraints (budget, size, etc.) when suggesting
+- Prefer products with strong reviews/reputation
+- For electronics/tech, suggest current generation products
+- Keep suggestions to 2-3 products max
+- Reply with valid JSON only"""
 
 FILTER_RESULTS_SYSTEM = """You are evaluating web search results for relevance and specificity.
 
@@ -107,7 +155,7 @@ DROP a result if it meets ANY of these criteria:
 
 2. **Catalog/category page** — Result shows multiple items instead of one specific offering
 
-   **HARD RULE - URL Contains Catalog Patterns** (auto-DROP if ANY found):
+   **URL Catalog Patterns** (strong signal, verify with title before dropping):
    - /category/, /categories/, /c/, /collections/, /collection/
    - /shop/, /browse/, /search/, /filter/, /all-
    - catpage-, cat-, category-, collection- (in path or filename)
@@ -118,7 +166,7 @@ DROP a result if it meets ANY of these criteria:
    - Title: Plural generic terms ("Men's Shirts", "Water Bottles"), "Collection", "Shop All"
    - Content: "browse our selection", "filter by", "sort by", "X items", "showing Y results"
 
-   **IMPORTANT**: If URL contains any hard rule pattern, DROP immediately regardless of title/content.
+   **IMPORTANT**: If URL contains catalog patterns AND title/content confirms it is a listing page, DROP. If the title looks like a specific product despite the URL pattern, KEEP.
 
 3. **Article/guide/blog/listicle** — Editorial content, not a purchasable item
    URL Signals:
@@ -158,9 +206,26 @@ Respond with JSON:
 }
 
 **Evaluation Order**:
-1. Check URL first - if contains any HARD RULE catalog pattern → automatic DROP
+1. Check URL for catalog patterns — if found, check title to confirm it's a listing page before dropping
 2. Check if article/blog/listicle by URL → DROP
 3. Check if wrong item type → DROP if clearly different
 4. If passes above, KEEP even if title/content seems generic
 
-Balance: Prefer keeping specific product pages even if not perfect match over showing catalog/article pages. When in doubt between a specific product and a catalog, KEEP the specific product. But URL catalog patterns are non-negotiable - always DROP."""
+Balance: When in doubt, KEEP — better to show a potentially useful result than nothing. Prefer keeping specific product pages even if not perfect match over showing catalog/article pages."""
+
+EXTRACT_PREFERENCES_SYSTEM = """Given a history of user ratings on search results, extract preference patterns.
+
+Input: list of rated results with "up"/"down" values across multiple rounds.
+
+Output JSON:
+{
+  "liked_attributes": ["stainless steel", "32oz size", "under $30", "CamelBak brand"],
+  "disliked_attributes": ["plastic", "generic brand", "over $50"],
+  "summary": "User prefers stainless steel water bottles from name brands, 32oz, under $30"
+}
+
+Rules:
+- Only extract patterns with 2+ supporting signals (don't over-index on single ratings)
+- Include: material, brand, price range, size, style, features
+- Be concise — each attribute should be 1-4 words
+- Reply with valid JSON only"""
