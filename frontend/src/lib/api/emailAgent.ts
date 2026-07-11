@@ -1,5 +1,5 @@
 import type { DraftChatMessage, EmailAgentItem, EmailThreadDetail } from "../../types/emailAgent";
-import { apiUrl } from "./client";
+import { apiFetch } from "./client";
 
 export type EmailAgentItemDetail = {
   item: EmailAgentItem;
@@ -20,7 +20,7 @@ async function parseError(response: Response, fallback: string): Promise<never> 
 }
 
 export async function fetchEmailAgentItems(): Promise<EmailAgentItem[]> {
-  const response = await fetch(`${apiUrl}/email-agent/items`);
+  const response = await apiFetch("/email-agent/items");
   if (!response.ok) {
     await parseError(response, "Failed to load email queue");
   }
@@ -29,7 +29,7 @@ export async function fetchEmailAgentItems(): Promise<EmailAgentItem[]> {
 }
 
 export async function fetchEmailAgentItem(itemId: string): Promise<EmailAgentItemDetail> {
-  const response = await fetch(`${apiUrl}/email-agent/items/${itemId}`);
+  const response = await apiFetch(`/email-agent/items/${itemId}`);
   if (!response.ok) {
     await parseError(response, "Failed to load email");
   }
@@ -37,7 +37,7 @@ export async function fetchEmailAgentItem(itemId: string): Promise<EmailAgentIte
 }
 
 export async function fetchEmailAgentThread(itemId: string): Promise<EmailThreadDetail> {
-  const response = await fetch(`${apiUrl}/email-agent/items/${itemId}/thread`);
+  const response = await apiFetch(`/email-agent/items/${itemId}/thread`);
   if (!response.ok) {
     await parseError(response, "Failed to load full email");
   }
@@ -45,7 +45,7 @@ export async function fetchEmailAgentThread(itemId: string): Promise<EmailThread
 }
 
 export async function scanEmailAgentInbox(): Promise<EmailAgentScanResult> {
-  const response = await fetch(`${apiUrl}/email-agent/scan`, { method: "POST" });
+  const response = await apiFetch("/email-agent/scan", { method: "POST" });
   if (!response.ok) {
     await parseError(response, "Inbox scan failed");
   }
@@ -56,7 +56,7 @@ export async function adjustEmailDraft(
   itemId: string,
   message: string
 ): Promise<{ draftResponse: string; assistantMessage: DraftChatMessage }> {
-  const response = await fetch(`${apiUrl}/email-agent/items/${itemId}/adjust`, {
+  const response = await apiFetch(`/email-agent/items/${itemId}/adjust`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
@@ -71,7 +71,7 @@ export async function approveEmailDraft(
   itemId: string,
   draftResponse: string
 ): Promise<{ success: boolean; messageId?: string }> {
-  const response = await fetch(`${apiUrl}/email-agent/items/${itemId}/approve`, {
+  const response = await apiFetch(`/email-agent/items/${itemId}/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ draftResponse }),
@@ -83,7 +83,7 @@ export async function approveEmailDraft(
 }
 
 export async function generateEmailDraft(itemId: string): Promise<{ item: EmailAgentItem }> {
-  const response = await fetch(`${apiUrl}/email-agent/items/${itemId}/draft`, {
+  const response = await apiFetch(`/email-agent/items/${itemId}/draft`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -93,7 +93,7 @@ export async function generateEmailDraft(itemId: string): Promise<{ item: EmailA
 }
 
 export async function discardEmailItem(itemId: string): Promise<void> {
-  const response = await fetch(`${apiUrl}/email-agent/items/${itemId}/discard`, {
+  const response = await apiFetch(`/email-agent/items/${itemId}/discard`, {
     method: "POST",
   });
   if (!response.ok) {

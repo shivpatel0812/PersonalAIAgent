@@ -1,5 +1,5 @@
 import type { AgentStep, SavedChat } from "../../types/research";
-import { apiUrl } from "./client";
+import { apiFetch } from "./client";
 
 export type AgentRunSummary = {
   id: string;
@@ -23,7 +23,7 @@ export type AgentRunDetail = AgentRunSummary & {
 };
 
 export async function fetchRuns(limit = 50): Promise<AgentRunSummary[]> {
-  const response = await fetch(`${apiUrl}/ai/runs?limit=${limit}`);
+  const response = await apiFetch(`/ai/runs?limit=${limit}`);
   if (!response.ok) {
     throw new Error(`Failed to load runs: ${response.status}`);
   }
@@ -31,7 +31,7 @@ export async function fetchRuns(limit = 50): Promise<AgentRunSummary[]> {
 }
 
 export async function fetchRun(runId: string): Promise<AgentRunDetail> {
-  const response = await fetch(`${apiUrl}/ai/runs/${runId}`);
+  const response = await apiFetch(`/ai/runs/${runId}`);
   if (!response.ok) {
     throw new Error(`Failed to load run: ${response.status}`);
   }

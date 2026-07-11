@@ -1,8 +1,8 @@
-import { apiUrl } from "./client";
+import { apiFetch, apiUrl } from "./client";
 import type { RobinhoodStatus, RobinhoodToolInfo } from "../../types/robinhood";
 
 export async function fetchRobinhoodStatus(): Promise<RobinhoodStatus> {
-  const response = await fetch(`${apiUrl}/auth/robinhood/status`);
+  const response = await apiFetch("/auth/robinhood/status");
   if (!response.ok) {
     throw new Error(`Robinhood status check failed: ${response.status}`);
   }
@@ -10,7 +10,7 @@ export async function fetchRobinhoodStatus(): Promise<RobinhoodStatus> {
 }
 
 export async function fetchRobinhoodTools(): Promise<RobinhoodToolInfo[]> {
-  const response = await fetch(`${apiUrl}/auth/robinhood/tools`);
+  const response = await apiFetch("/auth/robinhood/tools");
   if (!response.ok) {
     throw new Error(`Failed to fetch Robinhood tools: ${response.status}`);
   }
@@ -23,7 +23,7 @@ export function getRobinhoodConnectUrl(): string {
 }
 
 export async function disconnectRobinhood(): Promise<void> {
-  const response = await fetch(`${apiUrl}/auth/robinhood/disconnect`, {
+  const response = await apiFetch("/auth/robinhood/disconnect", {
     method: "POST",
   });
   if (!response.ok) {

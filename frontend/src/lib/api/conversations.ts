@@ -1,8 +1,8 @@
 import type { Conversation, PageType, ThreadSummary } from "../../types/conversation";
-import { apiUrl } from "./client";
+import { apiFetch } from "./client";
 
 export async function fetchThreads(pageType: PageType): Promise<ThreadSummary[]> {
-  const response = await fetch(`${apiUrl}/ai/threads?page_type=${pageType}`);
+  const response = await apiFetch(`/ai/threads?page_type=${pageType}`);
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || `Failed to load chats: ${response.status}`);
@@ -14,7 +14,7 @@ export async function createThread(
   pageType: PageType,
   title?: string
 ): Promise<ThreadSummary> {
-  const response = await fetch(`${apiUrl}/ai/threads`, {
+  const response = await apiFetch("/ai/threads", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ page_type: pageType, title }),
@@ -27,7 +27,7 @@ export async function createThread(
 }
 
 export async function fetchThread(threadId: string): Promise<Conversation> {
-  const response = await fetch(`${apiUrl}/ai/threads/${threadId}`);
+  const response = await apiFetch(`/ai/threads/${threadId}`);
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || `Failed to load chat: ${response.status}`);
@@ -36,7 +36,7 @@ export async function fetchThread(threadId: string): Promise<Conversation> {
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
-  const response = await fetch(`${apiUrl}/ai/threads/${threadId}`, {
+  const response = await apiFetch(`/ai/threads/${threadId}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -47,7 +47,7 @@ export async function deleteThread(threadId: string): Promise<void> {
 
 /** @deprecated Use fetchThread instead */
 export async function fetchConversation(pageType: PageType): Promise<Conversation> {
-  const response = await fetch(`${apiUrl}/ai/conversations/${pageType}`);
+  const response = await apiFetch(`/ai/conversations/${pageType}`);
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || `Failed to load conversation: ${response.status}`);

@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { useAuth } from "../../context/AuthContext";
 import type { PageConfig, PageType } from "../../types/conversation";
 
 export type PersonalSubView = "chat" | "email-agent" | "find";
@@ -19,6 +21,9 @@ export function PageNav({
   onPersonalSubViewChange,
   emailAgentCount = 0,
 }: PageNavProps) {
+  const { user, signOut } = useAuth();
+  const [signingOut, setSigningOut] = useState(false);
+
   return (
     <aside className="flex h-screen w-72 shrink-0 flex-col border-r border-slate-800 bg-slate-950/95 backdrop-blur">
       <div className="border-b border-slate-800 px-4 py-4">
@@ -112,6 +117,21 @@ export function PageNav({
           );
         })}
       </nav>
+
+      <div className="border-t border-slate-800 px-4 py-3">
+        <p className="truncate text-xs text-slate-500">{user?.email ?? "Signed in"}</p>
+        <button
+          type="button"
+          disabled={signingOut}
+          onClick={() => {
+            setSigningOut(true);
+            void signOut().finally(() => setSigningOut(false));
+          }}
+          className="mt-2 text-xs text-slate-400 transition hover:text-slate-200 disabled:opacity-50"
+        >
+          {signingOut ? "Signing out…" : "Sign out"}
+        </button>
+      </div>
     </aside>
   );
 }

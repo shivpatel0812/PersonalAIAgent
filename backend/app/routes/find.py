@@ -5,10 +5,11 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from app.auth import AuthUser, get_current_user
 from app.db.find_sessions import create_session
 from app.universal.find.models import FindMessageFeedback, FindTurnResponse
 from app.universal.find.service import get_session_response, handle_message, reset_session
@@ -48,24 +49,31 @@ class MessageRequest(BaseModel):
 
 
 @router.post("/sessions", response_model=CreateSessionResponse)
-def create_find_session() -> CreateSessionResponse:
+def create_find_session(user: AuthUser = Depends(get_current_user)) -> CreateSessionResponse:
     try:
-        row = create_session()
+        row = create_session(user_id=user.id)
         return CreateSessionResponse(session_id=str(row["id"]))
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/sessions/{session_id}", response_model=FindTurnResponse)
-def get_find_session(session_id: str) -> FindTurnResponse:
+def get_find_session(
+    session_id: str,
+    user: AuthUser = Depends(get_current_user),
+) -> FindTurnResponse:
     try:
-        return get_session_response(session_id)
+        return get_session_response(session_id, user_id=user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/sessions/{session_id}/message", response_model=FindTurnResponse)
-async def post_find_message(session_id: str, body: MessageRequest) -> FindTurnResponse:
+async def post_find_message(
+    session_id: str,
+    body: MessageRequest,
+    user: AuthUser = Depends(get_current_user),
+) -> FindTurnResponse:
     if not body.message.strip() and body.feedback is None:
         raise HTTPException(status_code=400, detail="message or feedback is required")
     try:
@@ -73,6 +81,7 @@ async def post_find_message(session_id: str, body: MessageRequest) -> FindTurnRe
             session_id,
             message=body.message,
             feedback=body.feedback,
+            user_id=user.id,
         )
     except ValueError as exc:
         detail = str(exc)
@@ -81,9 +90,12 @@ async def post_find_message(session_id: str, body: MessageRequest) -> FindTurnRe
 
 
 @router.post("/sessions/{session_id}/reset", response_model=FindTurnResponse)
-def post_find_reset(session_id: str) -> FindTurnResponse:
+def post_find_reset(
+    session_id: str,
+    user: AuthUser = Depends(get_current_user),
+) -> FindTurnResponse:
     try:
-        return reset_session(session_id)
+        return reset_session(session_id, user_id=user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

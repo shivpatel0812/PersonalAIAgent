@@ -1,4 +1,4 @@
-import { apiUrl } from "./client";
+import { apiFetch, apiUrl } from "./client";
 
 export type ServiceInfo = {
   name: string;
@@ -41,7 +41,7 @@ export type AccountsListResponse = {
 };
 
 export async function fetchAvailableServices(): Promise<AvailableServicesResponse> {
-  const response = await fetch(`${apiUrl}/auth/google/services`);
+  const response = await apiFetch("/auth/google/services");
   if (!response.ok) {
     throw new Error(`Failed to fetch available services: ${response.status}`);
   }
@@ -49,7 +49,7 @@ export async function fetchAvailableServices(): Promise<AvailableServicesRespons
 }
 
 export async function fetchGoogleCalendarStatus(): Promise<GoogleCalendarStatus> {
-  const response = await fetch(`${apiUrl}/auth/google/status`);
+  const response = await apiFetch("/auth/google/status");
   if (!response.ok) {
     throw new Error(`Google status check failed: ${response.status}`);
   }
@@ -57,7 +57,7 @@ export async function fetchGoogleCalendarStatus(): Promise<GoogleCalendarStatus>
 }
 
 export async function disconnectGoogleCalendar(): Promise<void> {
-  const response = await fetch(`${apiUrl}/auth/google/disconnect`, { method: "POST" });
+  const response = await apiFetch("/auth/google/disconnect", { method: "POST" });
   if (!response.ok) {
     throw new Error(`Failed to disconnect Google Calendar: ${response.status}`);
   }
@@ -68,7 +68,6 @@ export function getGoogleConnectUrl(status: GoogleCalendarStatus, selectedServic
 
   let url = `${apiUrl}${status.connect_url}`;
 
-  // Add selected services as query parameters
   if (selectedServices && selectedServices.length > 0) {
     const params = selectedServices.map(s => `services=${encodeURIComponent(s)}`).join('&');
     url += `?${params}`;
@@ -78,7 +77,7 @@ export function getGoogleConnectUrl(status: GoogleCalendarStatus, selectedServic
 }
 
 export async function fetchAccounts(): Promise<AccountsListResponse> {
-  const response = await fetch(`${apiUrl}/auth/google/accounts`);
+  const response = await apiFetch("/auth/google/accounts");
   if (!response.ok) {
     throw new Error(`Failed to fetch accounts: ${response.status}`);
   }
@@ -86,7 +85,7 @@ export async function fetchAccounts(): Promise<AccountsListResponse> {
 }
 
 export async function deleteAccount(accountId: string): Promise<void> {
-  const response = await fetch(`${apiUrl}/auth/google/accounts/${accountId}`, {
+  const response = await apiFetch(`/auth/google/accounts/${accountId}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -95,7 +94,7 @@ export async function deleteAccount(accountId: string): Promise<void> {
 }
 
 export async function setPrimaryAccount(accountId: string): Promise<AccountInfo> {
-  const response = await fetch(`${apiUrl}/auth/google/accounts/${accountId}/set-primary`, {
+  const response = await apiFetch(`/auth/google/accounts/${accountId}/set-primary`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -105,7 +104,7 @@ export async function setPrimaryAccount(accountId: string): Promise<AccountInfo>
 }
 
 export async function updateAccountLabel(accountId: string, label: string | null): Promise<AccountInfo> {
-  const response = await fetch(`${apiUrl}/auth/google/accounts/${accountId}/label`, {
+  const response = await apiFetch(`/auth/google/accounts/${accountId}/label`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",

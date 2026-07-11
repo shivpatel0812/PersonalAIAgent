@@ -352,7 +352,10 @@ def _results_intro(request: FindRequest, count: int) -> str:
             f"I couldn't find strong matches for {request.subject}. "
             "Try broadening your request or changing a constraint."
         )
-    return f"Here are {count} options for {request.subject}:"
+    return (
+        f"Here are {count} options for {request.subject}. "
+        "Rate what you like and dislike, or tell me your preferences — brand, material, size, budget, etc."
+    )
 
 
 def _assistant_payload(
@@ -414,12 +417,13 @@ async def handle_message(
     *,
     message: str = "",
     feedback: FindMessageFeedback = None,
+    user_id: str = "default",
 ) -> FindTurnResponse:
-    row = get_session(session_id)
+    row = get_session(session_id, user_id=user_id)
     if row is None:
         raise ValueError(f"Session not found: {session_id}")
 
-    state = load_session_state(session_id)
+    state = load_session_state(session_id, user_id=user_id)
     clarification_rounds = int(row.get("clarification_rounds") or 0)
     prior_request = state.request.model_copy(deep=True) if state.request else None
 
@@ -505,7 +509,10 @@ async def handle_message(
 
             results = all_results
             search_query = " + ".join(search_queries)
-            intro = f"Since '{request.subject}' is a broad category, I'm showing you specific options: {', '.join(suggested_products[:2])}. Here are {len(results)} products:"
+            intro = (
+                f"Here are some options for {request.subject}. "
+                "Rate what you like and dislike, or tell me your preferences — brand, material, size, budget, etc."
+            )
         else:
             # Normal specific query search
             query = _build_query(request)
@@ -627,11 +634,11 @@ async def handle_message(
     return _turn_response(session_id, state, intro)
 
 
-def get_session_response(session_id: str) -> FindTurnResponse:
-    row = get_session(session_id)
+def get_session_response(session_id: str, *, user_id: str = "default") -> FindTurnResponse:
+    row = get_session(session_id, user_id=user_id)
     if row is None:
         raise ValueError(f"Session not found: {session_id}")
-    state = load_session_state(session_id)
+    state = load_session_state(session_id, user_id=user_id)
     last_assistant = next(
         (m.content for m in reversed(list_messages(session_id)) if m.role == "assistant"),
         None,
@@ -639,8 +646,8 @@ def get_session_response(session_id: str) -> FindTurnResponse:
     return _turn_response(session_id, state, last_assistant)
 
 
-def reset_session(session_id: str) -> FindTurnResponse:
-    row = get_session(session_id)
+def reset_session(session_id: str, *, user_id: str = "default") -> FindTurnResponse:
+    row = get_session(session_id, user_id=user_id)
     if row is None:
         raise ValueError(f"Session not found: {session_id}")
     state = db_reset_session(session_id)

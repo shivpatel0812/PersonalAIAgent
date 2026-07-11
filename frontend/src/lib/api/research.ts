@@ -1,5 +1,5 @@
 import type { ResearchResponse, StreamEvent, PastRunMemory } from "../../types/research";
-import { apiUrl } from "./client";
+import { apiFetch } from "./client";
 
 export type ResearchRequest = {
   question: string;
@@ -9,7 +9,7 @@ export type ResearchRequest = {
 };
 
 export async function postResearch(body: ResearchRequest): Promise<ResearchResponse> {
-  const response = await fetch(`${apiUrl}/ai/research`, {
+  const response = await apiFetch("/ai/research", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -35,7 +35,7 @@ export async function postResearchStreaming(
   body: ResearchRequest,
   callbacks: StreamCallbacks
 ): Promise<void> {
-  const response = await fetch(`${apiUrl}/ai/research/stream`, {
+  const response = await apiFetch("/ai/research/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

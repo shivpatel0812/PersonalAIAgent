@@ -1,6 +1,6 @@
 /** Microsoft account API helpers. */
 
-import { apiUrl } from "./client";
+import { apiFetch, apiUrl } from "./client";
 
 export type MicrosoftAccountInfo = {
   id: string;
@@ -24,7 +24,7 @@ export type MicrosoftStatus = {
 };
 
 export async function fetchMicrosoftStatus(): Promise<MicrosoftStatus> {
-  const response = await fetch(`${apiUrl}/auth/microsoft/status`);
+  const response = await apiFetch("/auth/microsoft/status");
   if (!response.ok) {
     throw new Error(`Microsoft status check failed: ${response.status}`);
   }
@@ -32,7 +32,7 @@ export async function fetchMicrosoftStatus(): Promise<MicrosoftStatus> {
 }
 
 export async function fetchMicrosoftAccounts(): Promise<MicrosoftAccountsListResponse> {
-  const response = await fetch(`${apiUrl}/auth/microsoft/accounts`);
+  const response = await apiFetch("/auth/microsoft/accounts");
   if (!response.ok) {
     throw new Error(`Failed to fetch Microsoft accounts: ${response.status}`);
   }
@@ -40,7 +40,7 @@ export async function fetchMicrosoftAccounts(): Promise<MicrosoftAccountsListRes
 }
 
 export async function deleteMicrosoftAccount(accountId: string): Promise<void> {
-  const response = await fetch(`${apiUrl}/auth/microsoft/accounts/${accountId}`, {
+  const response = await apiFetch(`/auth/microsoft/accounts/${accountId}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -51,7 +51,7 @@ export async function deleteMicrosoftAccount(accountId: string): Promise<void> {
 export async function setPrimaryMicrosoftAccount(
   accountId: string
 ): Promise<MicrosoftAccountInfo> {
-  const response = await fetch(`${apiUrl}/auth/microsoft/accounts/${accountId}/set-primary`, {
+  const response = await apiFetch(`/auth/microsoft/accounts/${accountId}/set-primary`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -64,7 +64,7 @@ export async function updateMicrosoftAccountLabel(
   accountId: string,
   label: string | null
 ): Promise<MicrosoftAccountInfo> {
-  const response = await fetch(`${apiUrl}/auth/microsoft/accounts/${accountId}/label`, {
+  const response = await apiFetch(`/auth/microsoft/accounts/${accountId}/label`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -78,6 +78,6 @@ export async function updateMicrosoftAccountLabel(
 }
 
 export function getMicrosoftConnectUrl(selectAccount = false): string {
-  const base = `${import.meta.env.VITE_API_URL}/auth/microsoft/connect`;
+  const base = `${apiUrl}/auth/microsoft/connect`;
   return selectAccount ? `${base}?select_account=true` : base;
 }

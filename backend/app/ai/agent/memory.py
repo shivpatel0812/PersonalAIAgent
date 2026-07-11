@@ -64,6 +64,8 @@ def _find_related_runs_keyword(
     question: str,
     limit: int = MAX_MEMORY_RUNS,
     min_score: float = MIN_RELEVANCE_SCORE,
+    *,
+    user_id: str = "default",
 ) -> list[PastRunMemory]:
     """
     Find related runs using keyword-based matching (fallback method).
@@ -72,6 +74,7 @@ def _find_related_runs_keyword(
         question: The research question
         limit: Maximum number of runs to return
         min_score: Minimum relevance score (0-1)
+        user_id: Authenticated user whose past runs to search
 
     Returns:
         List of related runs with relevance scores
@@ -79,7 +82,7 @@ def _find_related_runs_keyword(
     from app.db.agent_runs import list_agent_runs
 
     try:
-        candidates = list_agent_runs(limit=CANDIDATE_RUN_LIMIT)
+        candidates = list_agent_runs(limit=CANDIDATE_RUN_LIMIT, user_id=user_id)
     except Exception as exc:
         print(f"Failed to load past runs for memory: {exc}")
         return []
@@ -117,6 +120,8 @@ def find_related_runs(
     question: str,
     limit: int = MAX_MEMORY_RUNS,
     min_score: float = MIN_RELEVANCE_SCORE,
+    *,
+    user_id: str = "default",
 ) -> list[PastRunMemory]:
     """
     Find related runs using vector similarity search with automatic fallback to keyword matching.
@@ -125,14 +130,16 @@ def find_related_runs(
         question: The research question
         limit: Maximum number of runs to return
         min_score: Minimum relevance score (0-1)
+        user_id: Authenticated user whose past runs to search
 
     Returns:
         List of related runs with relevance scores
     """
     from app.ai.config import get_ai_settings
     from app.ai.embeddings import generate_embedding, prepare_text_for_embedding
-    from app.db.agent_runs import find_similar_runs_vector
+    from app.db.agent_runs import claim_legacy_default_runs, find_similar_runs_vector
 
+    claim_legacy_default_runs(user_id)
     settings = get_ai_settings()
 
     # Try vector similarity search if enabled
@@ -147,7 +154,8 @@ def find_related_runs(
                 similar_runs = find_similar_runs_vector(
                     query_embedding=query_embedding,
                     match_threshold=min_score,
-                    match_count=limit
+                    match_count=limit,
+                    user_id=user_id,
                 )
 
                 if similar_runs:
@@ -170,7 +178,7 @@ def find_related_runs(
             print(f"Vector search failed, falling back to keyword matching: {e}")
 
     # Fall back to keyword-based matching
-    return _find_related_runs_keyword(question, limit, min_score)
+    return _find_related_runs_keyword(question, limit, min_score, user_id=user_id)
 
 
 def format_memory_context(memory_runs: list[PastRunMemory]) -> str:

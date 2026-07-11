@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import httpx
@@ -9,6 +9,7 @@ from app.ai.agent.loop import AgentStep, run_agent, run_agent_streaming
 from app.ai.agent.memory import PastRunMemory, find_related_runs, format_memory_context
 from app.ai.openai_client import chat
 from app.ai.tools.tavily import SearchResult, web_search
+from app.auth import AuthUser, get_current_user
 from app.db.agent_runs import get_agent_run, list_agent_runs, save_agent_run
 from app.db.conversation_threads import (
     PAGE_CONTEXT,
@@ -69,16 +70,25 @@ class ResearchResponse(BaseModel):
     memory_runs: list[PastRunMemory] = Field(default_factory=list)
 
 
-def _load_research_memory(question: str) -> tuple[str | None, list[PastRunMemory]]:
-    memory_runs = find_related_runs(question)
+def _load_research_memory(
+    question: str,
+    *,
+    user_id: str,
+) -> tuple[str | None, list[PastRunMemory]]:
+    memory_runs = find_related_runs(question, user_id=user_id)
     if not memory_runs:
         return None, []
     return format_memory_context(memory_runs), memory_runs
 
 
-def _resolve_thread_id(page_type: str | None, thread_id: str | None) -> str | None:
+def _resolve_thread_id(
+    page_type: str | None,
+    thread_id: str | None,
+    *,
+    user_id: str,
+) -> str | None:
     if thread_id:
-        thread = get_thread_by_id(thread_id)
+        thread = get_thread_by_id(thread_id, user_id=user_id)
         if thread is None:
             raise ValueError(f"Thread not found: {thread_id}")
         return thread["id"]
@@ -87,22 +97,24 @@ def _resolve_thread_id(page_type: str | None, thread_id: str | None) -> str | No
         return None
 
     page_type = validate_page_type(page_type)
-    return get_or_create_thread(page_type)["id"]
+    return get_or_create_thread(page_type, user_id=user_id)["id"]
 
 
 def _load_conversation_context(
     page_type: str | None,
     thread_id: str | None = None,
+    *,
+    user_id: str,
 ) -> tuple[list[dict[str, str]] | None, str | None, str | None]:
     if not page_type and not thread_id:
         return None, None, None
 
     try:
-        resolved_thread_id = _resolve_thread_id(page_type, thread_id)
+        resolved_thread_id = _resolve_thread_id(page_type, thread_id, user_id=user_id)
         if resolved_thread_id is None:
             return None, None, None
 
-        thread = get_thread_by_id(resolved_thread_id)
+        thread = get_thread_by_id(resolved_thread_id, user_id=user_id)
         if thread is None:
             raise ValueError(f"Thread not found: {resolved_thread_id}")
 
@@ -153,6 +165,8 @@ class ConversationResponse(BaseModel):
 
 
 class ThreadSummary(BaseModel):
+    model_config = {"extra": "ignore"}
+
     id: str
     page_type: str
     title: str
@@ -166,7 +180,10 @@ class CreateThreadRequest(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-def ai_chat(body: ChatRequest) -> ChatResponse:
+def ai_chat(
+    body: ChatRequest,
+    user: AuthUser = Depends(get_current_user),
+) -> ChatResponse:
     if not settings.openai_configured:
         raise HTTPException(status_code=503, detail="OpenAI API key is not configured")
 
@@ -179,7 +196,10 @@ def ai_chat(body: ChatRequest) -> ChatResponse:
 
 
 @router.post("/search", response_model=SearchResponse)
-def ai_search(body: SearchRequest) -> SearchResponse:
+def ai_search(
+    body: SearchRequest,
+    user: AuthUser = Depends(get_current_user),
+) -> SearchResponse:
     if not settings.tavily_configured:
         raise HTTPException(status_code=503, detail="Tavily API key is not configured")
 
@@ -197,15 +217,18 @@ def ai_search(body: SearchRequest) -> SearchResponse:
 
 
 @router.post("/research", response_model=ResearchResponse)
-def ai_research(body: ResearchRequest) -> ResearchResponse:
+def ai_research(
+    body: ResearchRequest,
+    user: AuthUser = Depends(get_current_user),
+) -> ResearchResponse:
     if not settings.openai_configured:
         raise HTTPException(status_code=503, detail="OpenAI API key is not configured")
     if not settings.tavily_configured:
         raise HTTPException(status_code=503, detail="Tavily API key is not configured")
 
-    memory_context, memory_runs = _load_research_memory(body.question)
+    memory_context, memory_runs = _load_research_memory(body.question, user_id=user.id)
     conversation_history, page_context, thread_id = _load_conversation_context(
-        body.page_type, body.thread_id
+        body.page_type, body.thread_id, user_id=user.id
     )
 
     try:
@@ -223,7 +246,7 @@ def ai_research(body: ResearchRequest) -> ResearchResponse:
     run_id: str | None = None
     saved = False
     try:
-        run_id = save_agent_run(result)
+        run_id = save_agent_run(result, user_id=user.id)
         saved = True
         if thread_id:
             append_conversation_turn(
@@ -248,7 +271,10 @@ def ai_research(body: ResearchRequest) -> ResearchResponse:
 
 
 @router.post("/research/stream")
-def ai_research_stream(body: ResearchRequest):
+def ai_research_stream(
+    body: ResearchRequest,
+    user: AuthUser = Depends(get_current_user),
+):
     """
     Streaming version of /research that returns Server-Sent Events (SSE).
     Each event contains: event: <type>\ndata: <json>\n\n
@@ -259,9 +285,9 @@ def ai_research_stream(body: ResearchRequest):
     if not settings.tavily_configured:
         raise HTTPException(status_code=503, detail="Tavily API key is not configured")
 
-    memory_context, memory_runs = _load_research_memory(body.question)
+    memory_context, memory_runs = _load_research_memory(body.question, user_id=user.id)
     conversation_history, page_context, thread_id = _load_conversation_context(
-        body.page_type, body.thread_id
+        body.page_type, body.thread_id, user_id=user.id
     )
 
     def event_generator():
@@ -292,7 +318,7 @@ def ai_research_stream(body: ResearchRequest):
                                 for run in event.get("memory_runs", [])
                             ],
                         )
-                        run_id = save_agent_run(result)
+                        run_id = save_agent_run(result, user_id=user.id)
                         if thread_id:
                             try:
                                 append_conversation_turn(
@@ -326,14 +352,18 @@ def ai_research_stream(body: ResearchRequest):
 
 
 @router.get("/threads", response_model=list[ThreadSummary])
-def ai_list_threads(page_type: str, limit: int = 50) -> list[ThreadSummary]:
+def ai_list_threads(
+    page_type: str,
+    limit: int = 50,
+    user: AuthUser = Depends(get_current_user),
+) -> list[ThreadSummary]:
     if page_type not in VALID_PAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid page_type: {page_type}")
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
 
     try:
-        threads = list_threads(page_type, limit=limit)
+        threads = list_threads(page_type, limit=limit, user_id=user.id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to list threads: {exc}") from exc
 
@@ -341,12 +371,15 @@ def ai_list_threads(page_type: str, limit: int = 50) -> list[ThreadSummary]:
 
 
 @router.post("/threads", response_model=ThreadSummary)
-def ai_create_thread(body: CreateThreadRequest) -> ThreadSummary:
+def ai_create_thread(
+    body: CreateThreadRequest,
+    user: AuthUser = Depends(get_current_user),
+) -> ThreadSummary:
     if body.page_type not in VALID_PAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid page_type: {body.page_type}")
 
     try:
-        thread = create_thread(body.page_type, title=body.title)
+        thread = create_thread(body.page_type, title=body.title, user_id=user.id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to create thread: {exc}") from exc
 
@@ -354,9 +387,12 @@ def ai_create_thread(body: CreateThreadRequest) -> ThreadSummary:
 
 
 @router.get("/threads/{thread_id}", response_model=ConversationResponse)
-def ai_get_thread(thread_id: str) -> ConversationResponse:
+def ai_get_thread(
+    thread_id: str,
+    user: AuthUser = Depends(get_current_user),
+) -> ConversationResponse:
     try:
-        conversation = get_conversation_by_thread_id(thread_id)
+        conversation = get_conversation_by_thread_id(thread_id, user_id=user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -372,13 +408,16 @@ def ai_get_thread(thread_id: str) -> ConversationResponse:
 
 
 @router.delete("/threads/{thread_id}")
-def ai_delete_thread(thread_id: str) -> dict[str, str]:
-    thread = get_thread_by_id(thread_id)
+def ai_delete_thread(
+    thread_id: str,
+    user: AuthUser = Depends(get_current_user),
+) -> dict[str, str]:
+    thread = get_thread_by_id(thread_id, user_id=user.id)
     if thread is None:
         raise HTTPException(status_code=404, detail="Thread not found")
 
     try:
-        delete_thread(thread_id)
+        delete_thread(thread_id, user_id=user.id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to delete thread: {exc}") from exc
 
@@ -386,12 +425,15 @@ def ai_delete_thread(thread_id: str) -> dict[str, str]:
 
 
 @router.get("/conversations/{page_type}", response_model=ConversationResponse)
-def ai_get_conversation(page_type: str) -> ConversationResponse:
+def ai_get_conversation(
+    page_type: str,
+    user: AuthUser = Depends(get_current_user),
+) -> ConversationResponse:
     if page_type not in VALID_PAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid page_type: {page_type}")
 
     try:
-        conversation = get_conversation(page_type)
+        conversation = get_conversation(page_type, user_id=user.id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to load conversation: {exc}") from exc
 
@@ -405,12 +447,15 @@ def ai_get_conversation(page_type: str) -> ConversationResponse:
 
 
 @router.get("/runs", response_model=list[AgentRunSummary])
-def ai_list_runs(limit: int = 20) -> list[AgentRunSummary]:
+def ai_list_runs(
+    limit: int = 20,
+    user: AuthUser = Depends(get_current_user),
+) -> list[AgentRunSummary]:
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
 
     try:
-        runs = list_agent_runs(limit=limit)
+        runs = list_agent_runs(limit=limit, user_id=user.id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to load runs: {exc}") from exc
 
@@ -418,9 +463,12 @@ def ai_list_runs(limit: int = 20) -> list[AgentRunSummary]:
 
 
 @router.get("/runs/{run_id}", response_model=AgentRunDetail)
-def ai_get_run(run_id: str) -> AgentRunDetail:
+def ai_get_run(
+    run_id: str,
+    user: AuthUser = Depends(get_current_user),
+) -> AgentRunDetail:
     try:
-        run = get_agent_run(run_id)
+        run = get_agent_run(run_id, user_id=user.id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to load run: {exc}") from exc
 
@@ -428,4 +476,5 @@ def ai_get_run(run_id: str) -> AgentRunDetail:
         raise HTTPException(status_code=404, detail="Run not found")
 
     steps = run.pop("steps", [])
+    run.pop("user_id", None)
     return AgentRunDetail(**run, steps=steps)

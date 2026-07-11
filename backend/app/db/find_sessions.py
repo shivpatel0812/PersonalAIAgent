@@ -29,21 +29,22 @@ def create_session(*, user_id: str = "default", title: str | None = None) -> dic
     return response.data[0]
 
 
-def get_session(session_id: str) -> dict[str, Any] | None:
-    response = (
+def get_session(session_id: str, *, user_id: str | None = None) -> dict[str, Any] | None:
+    query = (
         _client()
         .table("find_sessions")
         .select("*")
         .eq("id", session_id)
-        .limit(1)
-        .execute()
     )
+    if user_id is not None:
+        query = query.eq("user_id", user_id)
+    response = query.limit(1).execute()
     rows = response.data or []
     return rows[0] if rows else None
 
 
-def load_session_state(session_id: str) -> FindSessionState:
-    row = get_session(session_id)
+def load_session_state(session_id: str, *, user_id: str | None = None) -> FindSessionState:
+    row = get_session(session_id, user_id=user_id)
     if row is None:
         raise ValueError(f"Session not found: {session_id}")
     raw = row.get("state") or {}

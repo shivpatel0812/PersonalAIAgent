@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from app.auth import AuthUser, get_current_user
 from app.db.user_email_profile import get_profile, upsert_profile
 
 router = APIRouter(prefix="/user", tags=["user"])
@@ -16,7 +17,7 @@ class EmailProfileUpdate(BaseModel):
 
 
 @router.get("/email-profile")
-async def get_email_profile() -> dict:
+async def get_email_profile(user: AuthUser = Depends(get_current_user)) -> dict:
     profile = await get_profile()
     if not profile:
         return {
@@ -31,7 +32,10 @@ async def get_email_profile() -> dict:
 
 
 @router.put("/email-profile")
-async def update_email_profile(body: EmailProfileUpdate) -> dict:
+async def update_email_profile(
+    body: EmailProfileUpdate,
+    user: AuthUser = Depends(get_current_user),
+) -> dict:
     profile = await upsert_profile(
         display_name=body.displayName,
         role_title=body.roleTitle,

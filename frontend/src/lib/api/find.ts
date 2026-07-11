@@ -1,4 +1,4 @@
-import { apiUrl } from "./client";
+import { apiFetch, apiUrl } from "./client";
 import type { FindMessageFeedback, FindTurnResponse } from "../../types/find";
 
 export function getFindImageProxyUrl(imageUrl: string): string {
@@ -20,13 +20,13 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 export async function createFindSession(): Promise<string> {
-  const response = await fetch(`${apiUrl}/find/sessions`, { method: "POST" });
+  const response = await apiFetch("/find/sessions", { method: "POST" });
   const data = await parseJson<{ session_id: string }>(response);
   return data.session_id;
 }
 
 export async function fetchFindSession(sessionId: string): Promise<FindTurnResponse> {
-  const response = await fetch(`${apiUrl}/find/sessions/${sessionId}`);
+  const response = await apiFetch(`/find/sessions/${sessionId}`);
   return parseJson<FindTurnResponse>(response);
 }
 
@@ -35,7 +35,7 @@ export async function sendFindMessage(
   message: string,
   feedback?: FindMessageFeedback,
 ): Promise<FindTurnResponse> {
-  const response = await fetch(`${apiUrl}/find/sessions/${sessionId}/message`, {
+  const response = await apiFetch(`/find/sessions/${sessionId}/message`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, feedback: feedback ?? null }),
@@ -44,7 +44,7 @@ export async function sendFindMessage(
 }
 
 export async function resetFindSession(sessionId: string): Promise<FindTurnResponse> {
-  const response = await fetch(`${apiUrl}/find/sessions/${sessionId}/reset`, {
+  const response = await apiFetch(`/find/sessions/${sessionId}/reset`, {
     method: "POST",
   });
   return parseJson<FindTurnResponse>(response);

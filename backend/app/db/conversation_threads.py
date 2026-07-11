@@ -51,7 +51,7 @@ def _derive_title(content: str, max_chars: int = MAX_TITLE_CHARS) -> str:
     return cleaned[: max_chars - 1].rstrip() + "…"
 
 
-def list_threads(page_type: str, limit: int = 50) -> list[dict]:
+def list_threads(page_type: str, limit: int = 50, *, user_id: str = "default") -> list[dict]:
     client = get_supabase_client()
     if client is None:
         raise ValueError("Supabase is not configured")
@@ -60,8 +60,9 @@ def list_threads(page_type: str, limit: int = 50) -> list[dict]:
 
     response = (
         client.table("conversation_threads")
-        .select("id, page_type, title, created_at, updated_at")
+        .select("id, page_type, title, created_at, updated_at, user_id")
         .eq("page_type", page_type)
+        .eq("user_id", user_id)
         .order("updated_at", desc=True)
         .limit(limit)
         .execute()
@@ -69,7 +70,12 @@ def list_threads(page_type: str, limit: int = 50) -> list[dict]:
     return response.data or []
 
 
-def create_thread(page_type: str, title: str | None = None) -> dict:
+def create_thread(
+    page_type: str,
+    title: str | None = None,
+    *,
+    user_id: str = "default",
+) -> dict:
     client = get_supabase_client()
     if client is None:
         raise ValueError("Supabase is not configured")
@@ -79,7 +85,7 @@ def create_thread(page_type: str, title: str | None = None) -> dict:
 
     created = (
         client.table("conversation_threads")
-        .insert({"page_type": page_type, "title": thread_title})
+        .insert({"page_type": page_type, "title": thread_title, "user_id": user_id})
         .execute()
     )
 
@@ -89,42 +95,50 @@ def create_thread(page_type: str, title: str | None = None) -> dict:
     return created.data[0]
 
 
-def get_thread_by_id(thread_id: str) -> dict | None:
+def get_thread_by_id(thread_id: str, *, user_id: str | None = None) -> dict | None:
     client = get_supabase_client()
     if client is None:
         raise ValueError("Supabase is not configured")
 
-    response = (
+    query = (
         client.table("conversation_threads")
-        .select("id, page_type, title, created_at, updated_at")
+        .select("id, page_type, title, created_at, updated_at, user_id")
         .eq("id", thread_id)
-        .limit(1)
-        .execute()
     )
+    if user_id is not None:
+        query = query.eq("user_id", user_id)
+    response = query.limit(1).execute()
     if not response.data:
         return None
     return response.data[0]
 
 
-def get_most_recent_thread(page_type: str) -> dict | None:
-    threads = list_threads(page_type, limit=1)
+def get_most_recent_thread(page_type: str, *, user_id: str = "default") -> dict | None:
+    threads = list_threads(page_type, limit=1, user_id=user_id)
     return threads[0] if threads else None
 
 
-def get_or_create_thread(page_type: str) -> dict:
+def get_or_create_thread(page_type: str, *, user_id: str = "default") -> dict:
     """Return the most recent thread for a page, creating one if none exist."""
-    existing = get_most_recent_thread(page_type)
+    existing = get_most_recent_thread(page_type, user_id=user_id)
     if existing:
         return existing
-    return create_thread(page_type, title=PAGE_TITLES.get(page_type, DEFAULT_THREAD_TITLE))
+    return create_thread(
+        page_type,
+        title=PAGE_TITLES.get(page_type, DEFAULT_THREAD_TITLE),
+        user_id=user_id,
+    )
 
 
-def delete_thread(thread_id: str) -> None:
+def delete_thread(thread_id: str, *, user_id: str | None = None) -> None:
     client = get_supabase_client()
     if client is None:
         raise ValueError("Supabase is not configured")
 
-    client.table("conversation_threads").delete().eq("id", thread_id).execute()
+    query = client.table("conversation_threads").delete().eq("id", thread_id)
+    if user_id is not None:
+        query = query.eq("user_id", user_id)
+    query.execute()
 
 
 def get_thread_messages(thread_id: str) -> list[dict]:
@@ -142,14 +156,14 @@ def get_thread_messages(thread_id: str) -> list[dict]:
     return response.data or []
 
 
-def get_conversation(page_type: str) -> dict:
+def get_conversation(page_type: str, *, user_id: str = "default") -> dict:
     """Backward-compatible: returns the most recent thread for a page."""
-    thread = get_or_create_thread(page_type)
-    return get_conversation_by_thread_id(thread["id"])
+    thread = get_or_create_thread(page_type, user_id=user_id)
+    return get_conversation_by_thread_id(thread["id"], user_id=user_id)
 
 
-def get_conversation_by_thread_id(thread_id: str) -> dict:
-    thread = get_thread_by_id(thread_id)
+def get_conversation_by_thread_id(thread_id: str, *, user_id: str | None = None) -> dict:
+    thread = get_thread_by_id(thread_id, user_id=user_id)
     if thread is None:
         raise ValueError(f"Thread not found: {thread_id}")
 
